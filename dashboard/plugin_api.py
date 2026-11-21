@@ -35,6 +35,7 @@ actions = _sibling("pool_actions")
 relay_mod = _sibling("signin_relay")
 pool_state = _sibling("pool_state")
 timer = _sibling("harp_timer")
+typesafe = _sibling("typesafe")
 
 POOL_LOCK = threading.Lock()
 LIVE = {}            # provider -> {"read_at": epoch, "accounts": {entry id: reading}}
@@ -115,6 +116,10 @@ def _read_all(provider, pool):
     readings, snapshots = {}, {}
     for entry in pool.entries():
         if getattr(entry, "last_status", None) == "dead":
+            continue
+        if provider in contract.KEY_PROVIDERS:
+            readings[entry.id] = {"peak": None, "windows": [],
+                                  "check": typesafe.check(entry.runtime_api_key, entry.runtime_base_url or typesafe.BASE_URL)}
             continue
         snapshots[entry.id] = _read_usage(provider, entry)
         readings[entry.id] = _reading(snapshots[entry.id])
@@ -255,6 +260,8 @@ def pool_live(body: dict):
 def pool_balance(body: dict):
     """HARP balance: bench accounts at 90% or more, release HARP benches, order by usage."""
     provider = _provider(body)
+    if provider in contract.KEY_PROVIDERS:
+        raise HTTPException(400, "Type-safe keys have no usage percent to balance by.")
     with POOL_LOCK:
         pool = _pool(provider)
         snapshots = _read_all(provider, pool)
@@ -382,6 +389,8 @@ def signin_start(body: dict):
     one's label, position and schedule, and the old login is deleted only after success."""
     _expire_flows()
     provider = _provider(body)
+    if provider in contract.KEY_PROVIDERS:
+        raise HTTPException(400, "Type-safe accounts are API keys: add or replace the key instead.")
     pool = _pool(provider)
     replace_id = str((body or {}).get("replace") or "")
     old = next((e for e in pool.entries() if e.id == replace_id), None) if replace_id else None
@@ -469,6 +478,59 @@ def signin_step(body: dict):
 def signin_cancel(body: dict):
     _drop_flow(str((body or {}).get("flow") or ""), remove_new=True)
     return {"ok": True}
+
+
+def _ensure_typesafe_provider():
+    """Create Hermes' `providers.jev` (TypeSafe) once, so its API keys have a pool. The user asked for this."""
+    from hermes_cli.auth_commands import _configured_provider_entry
+    from hermes_cli.config import set_config_value
+
+    if _configured_provider_entry("jev") is None:
+        set_config_value("providers.jev.name", "TypeSafe")
+        set_config_value("providers.jev.base_url", typesafe.BASE_URL)
+
+
+@router.post("/pool/add-key")
+def pool_add_key(body: dict):
+    """Add a Type-safe API key to Hermes' pool, or replace one ("replace": entry id) in place.
+
+    The key is checked with TypeSafe first (free GET /v1/models) and is never returned or logged."""
+    provider = _provider(body)
+    if provider not in contract.KEY_PROVIDERS:
+        raise HTTPException(400, "This provider signs in through its website: use Add account.")
+    key = str((body or {}).get("key") or "").strip()
+    if not key or any(c.isspace() for c in key):
+        raise HTTPException(400, "Paste the whole API key.")
+    _ensure_typesafe_provider()
+    from agent.credential_pool import PooledCredential
+    from hermes_cli.auth_commands import AUTH_TYPE_API_KEY, SOURCE_MANUAL, _provider_base_url
+
+    pool = _pool(provider)
+    replace_id = str((body or {}).get("replace") or "")
+    old = next((e for e in pool.entries() if e.id == replace_id), None) if replace_id else None
+    if replace_id and old is None:
+        raise HTTPException(400, "That key is not in the pool.")
+    label = (old.label or old.id) if old else str((body or {}).get("label") or "").strip()
+    if not label:
+        raise HTTPException(400, "Enter a name for the key.")
+    if not old and any((e.label or "").lower() == label.lower() for e in pool.entries()):
+        raise HTTPException(400, "A key with this name is already in the pool.")
+    base_url = _provider_base_url(provider) or typesafe.BASE_URL
+    result = typesafe.check(key, base_url)
+    if not typesafe.key_accepted(result):
+        raise HTTPException(400 if result["status"] else 502,
+                            f"TypeSafe did not accept the key ({result['problem']}). Nothing was saved.")
+    import uuid
+    with POOL_LOCK:
+        entry = pool.add_entry(PooledCredential(provider=provider, id=uuid.uuid4().hex[:6], label=label,
+                                                auth_type=AUTH_TYPE_API_KEY, priority=0, source=SOURCE_MANUAL,
+                                                access_token=key, base_url=base_url))
+    if old:
+        _take_place(provider, old.id, entry)
+    LIVE.setdefault(provider, {"read_at": time.time(), "accounts": {}})["accounts"][entry.id] = {
+        "peak": None, "windows": [], "check": result}
+    _log(provider, "relogin" if old else "add", f"{'Replaced the key of' if old else 'Added key'} {label}")
+    return {"account": label, "models": result["models"], "replaced": bool(old)}
 
 
 @router.get("/report")

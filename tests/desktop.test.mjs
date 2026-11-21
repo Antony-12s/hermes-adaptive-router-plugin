@@ -142,11 +142,36 @@ test('account rows show 24 h tokens, sessions and their own row actions', async 
   assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/signin/start').body)), { provider: 'anthropic', replace: 'acc-1' })
 })
 
-test('account actions are disabled for providers HARP cannot manage', () => {
+test('type-safe accounts are API keys: add, replace and check them, no wake or balance', async () => {
   const app = fixture({ configured: false, usage: [] })
   app.slots[0] = 'jev'
+  app.results[0].data.accounts[0].usage = { peak: null, windows: [], check: { ok: true, status: 200, ms: 180, models: ['jev-latest'] } }
+  let page = app.render()
+  assert.equal(button(app, page, 'Wake').props.disabled, true)
+  assert.equal(button(app, page, 'Balance now').props.disabled, true)
+  assert.equal(button(app, page, 'Live usage').props.disabled, false)
+  assert.match(app.text(page), /Key works/)
+  assert.match(app.text(page), /jev-latest/)
+
+  button(app, page, 'Add account').props.onClick()
+  page = app.render()
+  assert.equal(app.nodes(page, n => n.props?.['data-action'] === 'start-signin').length, 0)
+  const key = app.nodes(page, n => n.type === 'input' && n.props['aria-label'] === 'API key')[0]
+  assert.equal(key.props.type, 'password')
+  app.nodes(page, n => n.type === 'input' && n.props['aria-label'] === 'Account name')[0].props.onChange({ target: { value: 'team' } })
+  key.props.onChange({ target: { value: 'ts-secret' } })
+  await app.nodes(app.render(), n => n.props?.['data-action'] === 'save-key')[0].props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/pool/add-key').body)), { provider: 'jev', label: 'team', key: 'ts-secret' })
+
+  const replace = app.nodes(app.render(), n => n.type === 'button' && n.props['aria-label'] === 'Replace key: Personal')[0]
+  assert.ok(replace)
+})
+
+test('account actions are disabled for providers HARP cannot manage', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.slots[0] = 'diagram'
   const page = app.render()
-  for (const label of ['Live usage', 'Wake', 'Balance now', 'Add account']) assert.equal(button(app, page, label).props.disabled, true, label)
+  for (const label of ['Live usage', 'Wake', 'Balance now', 'Add account']) assert.equal(app.nodes(page, n => n.type === 'button' && n.children.includes(label)).length, 0, label)
 })
 
 test('registers one Desktop page, sidebar entry and palette navigation', () => {

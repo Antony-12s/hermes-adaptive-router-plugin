@@ -4,7 +4,9 @@ import { createElement as h, useEffect, useState } from 'react'
 
 const ID = 'harp'
 const ROUTE = '/harp'
-const ACTION_PROVIDERS = ['anthropic', 'openai-codex']
+const ACTION_PROVIDERS = ['anthropic', 'openai-codex', 'jev']
+const KEY_PROVIDERS = ['jev']   // accounts are API keys: no sign-in flow, no usage windows
+const TYPESAFE_CONSOLE = 'https://console.typesafe.ai/home'
 const number = new Intl.NumberFormat()
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
 let rest
@@ -135,7 +137,7 @@ function RowActions({ row, canAct, onAction }) {
   const icon = (name, label, type) => h(Button, { size: 'sm', variant: 'ghost', title: label, 'aria-label': `${label}: ${row.label}`,
     disabled: !canAct || !row.id, onClick: () => onAction(type, row) }, h(Codicon, { name, size: '0.85rem' }))
   return h('span', { className: 'harp-row-actions' },
-    icon('key', 'Sign in again', 'relogin'),
+    row.keyed ? icon('key', 'Replace key', 'relogin') : icon('key', 'Sign in again', 'relogin'),
     row.parked ? icon('debug-start', 'Unpark', 'unpark') : icon('debug-pause', 'Park', 'park'),
     icon('calendar', row.schedule ? `Schedule: ${row.schedule}` : 'Schedule', 'schedule'),
     icon('trash', 'Remove', 'remove'))
@@ -164,15 +166,23 @@ function resetText(iso) {
   return new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
+function KeyCheck({ row }) {
+  const check = row.usage?.check
+  if (!check) return h('span', { className: 'harp-muted' }, 'Not checked yet')
+  const works = check.ok
+  return h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${works ? '' : ' off'}`, 'aria-hidden': true }),
+    works ? `Key works · ${check.ms} ms` : `Key ${check.problem}`)
+}
+
 function WindowCell({ row, window, name }) {
   if (!row.usage) return h('span', { className: 'harp-muted' }, 'Not read yet')
   if (!window) return h('span', { className: 'harp-muted' }, '—')
   return h(Meter, { percent: window.used_percent, label: `${row.label} ${name}` })
 }
 
-function Accounts({ query, canAct = false, onAction = () => {} }) {
+function Accounts({ query, canAct = false, onAction = () => {}, keyed = false }) {
   const data = query.data
-  const rows = data?.accounts || []
+  const rows = (data?.accounts || []).map(row => ({ ...row, keyed }))
   const readable = rows.filter(row => row.usage)
   const top = (pattern, fallback) => readable.reduce((best, row) => {
     const value = pickWindow(row, pattern, fallback)?.used_percent
@@ -185,13 +195,28 @@ function Accounts({ query, canAct = false, onAction = () => {} }) {
   return h('div', null,
     h(QueryState, { query, label: 'accounts and quota' }),
     data && h('div', null,
-      h('div', { className: 'harp-cards' },
+      keyed && h('div', { className: 'harp-banner' }, h(Codicon, { name: 'info', size: '0.8rem' }),
+        h('span', null, 'TypeSafe has no usage or balance API, so Live usage checks each key (free model list call). Balance and spend are in the ',
+          h('a', { href: TYPESAFE_CONSOLE, onClick: event => { event.preventDefault(); openExternal ? openExternal(TYPESAFE_CONSOLE) : window.open(TYPESAFE_CONSOLE) } }, 'TypeSafe console'), '.')),
+      keyed ? h('div', { className: 'harp-cards' },
+        h(SummaryCard, { title: 'In rotation', value: `${inRotation} / ${rows.length}`, detail: inRotation === rows.length ? 'all usable' : `${rows.length - inRotation} parked or blocked` }),
+        h(SummaryCard, { title: 'Keys working', value: rows.filter(r => r.usage?.check).length ? `${rows.filter(r => r.usage?.check?.ok).length} / ${rows.filter(r => r.usage?.check).length}` : '–', detail: 'from the last key check' }),
+        h(SummaryCard, { title: 'Models', value: (rows.find(r => r.usage?.check?.models?.length)?.usage.check.models || []).join(', ') || '–', detail: 'offered to these keys' }),
+        h(SummaryCard, { title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–', detail: tokens ? 'counted by HARP' : 'counting starts with the next request' }))
+      : h('div', { className: 'harp-cards' },
         h(SummaryCard, { title: 'In rotation', value: `${inRotation} / ${rows.length}`, detail: inRotation === rows.length ? 'all usable' : `${rows.length - inRotation} parked or blocked` }),
         h(SummaryCard, { title: 'Highest session', value: topSession ? `${number.format(topSession.value)}%` : '–', detail: topSession ? topSession.label : 'read live usage', percent: topSession?.value }),
         h(SummaryCard, { title: 'Highest week', value: topWeek ? `${number.format(topWeek.value)}%` : '–', detail: topWeek ? topWeek.label : 'read live usage', percent: topWeek?.value }),
         h(SummaryCard, { title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–', detail: tokens ? 'counted by HARP' : 'counting starts with the next request' })),
       h(Section, { title: 'POOL ACCOUNTS' }, data.accounts.length
-        ? h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Session', 'Week', 'Resets', 'Tokens, 24 h', 'Used by', 'State', ''], rows: data.accounts.map((row, index) => {
+        ? keyed ? h(Table, { label: 'Pool accounts', headings: ['#', 'Key', 'Check', 'Tokens, 24 h', 'Used by', 'State', ''], rows: rows.map((row, index) => ({ key: row.id || index, cells: [index + 1,
+              h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${usable(row) ? '' : ' off'}`, 'aria-hidden': true }), row.label),
+              h(KeyCheck, { row }),
+              h('span', { className: 'harp-num' }, row.tokens_24h ? compact.format(row.tokens_24h) : '–'),
+              h('span', { className: 'harp-status' }, row.used_by?.length ? row.used_by.join(', ') : 'idle'),
+              h(AccountState, { row }),
+              h(RowActions, { row, canAct, onAction })] })) })
+        : h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Session', 'Week', 'Resets', 'Tokens, 24 h', 'Used by', 'State', ''], rows: rows.map((row, index) => {
             const session = pickWindow(row, SESSION, 0)
             const week = pickWindow(row, WEEK, 1)
             return { key: row.id || index, cells: [index + 1,
@@ -206,7 +231,7 @@ function Accounts({ query, canAct = false, onAction = () => {} }) {
               h(AccountState, { row }),
               h(RowActions, { row, canAct, onAction })] }
           }) })
-        : h('div', { className: 'harp-empty' }, 'No accounts configured for this provider.'))))
+        : h('div', { className: 'harp-empty' }, keyed ? 'No Type-safe keys yet. Use Add account to paste one.' : 'No accounts configured for this provider.'))))
 }
 
 function Budget({ account }) {
@@ -278,7 +303,35 @@ function WakeDialog({ accounts, busy, onClose, onConfirm }) {
     !usable.length && h('p', null, 'No usable accounts.'))
 }
 
+function KeyDialog({ provider, replace, onClose, onDone }) {
+  const [label, setLabel] = useState('')
+  const [key, setKey] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const save = async () => {
+    setBusy(true); setError('')
+    try {
+      const result = await post('/pool/add-key', replace ? { provider, replace: replace.id, key: key.trim() } : { provider, label: label.trim(), key: key.trim() })
+      notify('success', `${result.replaced ? 'Replaced the key of' : 'Added'} ${result.account}.`)
+      onDone()
+    } catch (e) { setError(failure(e)) } finally { setBusy(false) }
+  }
+  const footer = h(Button, { size: 'sm', 'data-action': 'save-key', disabled: busy || !key.trim() || (!replace && !label.trim()), onClick: save },
+    busy ? 'Checking key…' : replace ? 'Replace key' : 'Add key')
+  return h(ActionDialog, { title: replace ? `Replace key: ${replace.label}` : 'Add Type-safe API key', onClose, footer },
+    h('p', null, replace
+      ? 'Paste the new key. It keeps this entry\'s name, position and schedule; the old key is removed after TypeSafe accepts the new one.'
+      : 'Paste a TypeSafe API key from the console. HARP checks it with TypeSafe (free model list call) and saves it in Hermes\' pool. Nothing is saved if TypeSafe rejects it.'),
+    !replace && h('label', { className: 'harp-field' }, 'Name'),
+    !replace && h(Input, { value: label, placeholder: 'team, personal…', 'aria-label': 'Account name', onChange: event => setLabel(event.target.value) }),
+    h('label', { className: 'harp-field' }, 'API key'),
+    h(Input, { type: 'password', autoComplete: 'off', spellCheck: false, value: key, placeholder: 'ts-…', 'aria-label': 'API key', onChange: event => setKey(event.target.value) }),
+    h('div', null, h(Button, { size: 'sm', variant: 'link', onClick: () => openExternal ? openExternal(TYPESAFE_CONSOLE) : window.open(TYPESAFE_CONSOLE) }, 'Get a key in the TypeSafe console')),
+    error && h('div', { className: 'harp-error', role: 'alert' }, error))
+}
+
 function AddDialog({ provider, replace, onClose, onDone }) {
+  if (KEY_PROVIDERS.includes(provider)) return h(KeyDialog, { provider, replace, onClose, onDone })
   const [label, setLabel] = useState('')
   const [flow, setFlow] = useState(null)
   const [code, setCode] = useState('')
@@ -501,6 +554,7 @@ function HarpPage() {
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
   const usage = useQuery({ queryKey: [ID, 'usage'], queryFn: () => rest('/usage'), refetchInterval: 60000 })
   const canAct = ACTION_PROVIDERS.includes(provider)
+  const keyed = KEY_PROVIDERS.includes(provider)
   const liveAt = accounts.data?.live_read_at
   useEffect(() => {
     // Fill each row's session and week bars without a click: a read-only usage read, at most every 5 minutes.
@@ -534,7 +588,7 @@ function HarpPage() {
         onClick: () => { accounts.refetch(); usage.refetch() } }, h(Codicon, { name: 'eye', size: '0.8rem' })),
       !diagram && tool('Live usage', 'refresh', { onClick: () => run('Live usage', '/pool/live', { provider }, () => notify('success', 'Live usage updated.')) }),
       !diagram && tool('Wake', 'zap', { disabled: provider !== 'anthropic' || !!busy, onClick: () => setDialog('wake') }),
-      !diagram && tool('Balance now', 'arrow-swap', { variant: 'outline', onClick: () => setDialog('balance') }),
+      !diagram && tool('Balance now', 'arrow-swap', { variant: 'outline', disabled: keyed || !canAct || !!busy, title: keyed ? 'Type-safe keys have no usage percent to balance by' : undefined, onClick: () => setDialog('balance') }),
       !diagram && tool('Add account', 'add', { variant: 'default', onClick: () => setDialog('add') })),
     !diagram && h('div', { className: 'harp-sub' },
       h(SegmentedControl, { options: [{ id: 'usage', label: 'Accounts & usage' }, { id: 'activity', label: 'Activity' },
@@ -545,7 +599,7 @@ function HarpPage() {
         : view === 'report' ? h(ReportView, { provider })
           : view === 'health' ? h(HealthView, { provider })
             : view === 'alerts' ? h(AlertsView, { provider })
-              : h('div', null, h(Accounts, { query: accounts, canAct: canAct && !busy, onAction }), h(Usage, { query: usage, tag, setTag }))),
+              : h('div', null, h(Accounts, { query: accounts, canAct: canAct && !busy, onAction, keyed }), h(Usage, { query: usage, tag, setTag }))),
     target?.type === 'relogin' && h(AddDialog, { provider, replace: target.row, onClose: closeTarget, onDone: () => { closeTarget(); accounts.refetch() } }),
     target?.type === 'park' && h(ParkDialog, { row: target.row, busy, onClose: closeTarget,
       onConfirm: until => run('Park', '/pool/park', { provider, id: target.row.id, until }, () => notify('success', `Parked ${target.row.label}.`)) }),

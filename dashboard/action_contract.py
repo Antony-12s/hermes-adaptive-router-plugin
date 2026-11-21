@@ -1,6 +1,7 @@
 """Input contract for HARP-owned account operations."""
 
-PROVIDERS = frozenset({"anthropic", "openai-codex"})
+PROVIDERS = frozenset({"anthropic", "openai-codex", "jev"})
+KEY_PROVIDERS = frozenset({"jev"})      # accounts are API keys: no OAuth sign-in, no usage windows
 
 
 def require_provider(provider):
