@@ -85,11 +85,20 @@ const CSS = `
 .harp-heat-wrap{overflow-x:auto;max-width:100%}
 .harp-heat{display:grid;grid-template-columns:72px repeat(24,minmax(0,1fr));gap:2px;font-size:.625rem;color:var(--ui-text-tertiary);margin-top:4px;width:100%;max-width:760px;box-sizing:border-box}
 .harp-heat-cell{height:14px;border-radius:2px;background:var(--ui-bg-quaternary)}
-.harp-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-top:4px;max-width:360px}
-.harp-cal-head{font-size:.625rem;color:var(--ui-text-tertiary);text-align:center;padding-bottom:2px}
-.harp-cal-day{display:flex;align-items:center;justify-content:center;aspect-ratio:1;border-radius:6px;background:var(--ui-bg-quaternary);font-size:.6875rem;color:var(--ui-text-primary)}
-.harp-cal-day.muted{background:transparent;color:var(--ui-text-tertiary);opacity:.4}
-.harp-cal-day.today{outline:2px solid var(--ui-accent);outline-offset:-2px;font-weight:600}
+.harp-gb-wrap{overflow-x:auto;max-width:100%}
+.harp-gb{display:grid;gap:3px;font-size:.625rem;color:var(--ui-text-tertiary);margin-top:4px;width:100%;max-width:760px;box-sizing:border-box;align-items:center}
+.harp-gb-head{text-align:center}
+.harp-gb-row-label{font-size:.6875rem;color:var(--ui-text-tertiary);white-space:nowrap}
+.harp-gb-cell{aspect-ratio:1;border-radius:3px;background:var(--ui-bg-quaternary)}
+.harp-gb-cell.lvl-1{background:color-mix(in srgb, var(--ui-accent) 28%, var(--ui-bg-quaternary))}
+.harp-gb-cell.lvl-2{background:color-mix(in srgb, var(--ui-accent) 52%, var(--ui-bg-quaternary))}
+.harp-gb-cell.lvl-3{background:color-mix(in srgb, var(--ui-accent) 76%, var(--ui-bg-quaternary))}
+.harp-gb-cell.lvl-4{background:var(--ui-accent)}
+.harp-gb-cell.dashed{background:transparent;border:1px dashed var(--ui-stroke-tertiary)}
+.harp-gb-cell.ring{outline:1.5px solid var(--ui-text-primary);outline-offset:-1.5px}
+.harp-gb-cell:not(.dashed):hover,.harp-gb-cell:not(.dashed):focus-visible{outline:1.5px solid var(--ui-text-primary);outline-offset:-1.5px}
+.harp-gb-total{display:flex;align-items:center;gap:6px;justify-content:flex-end;font-size:.6875rem;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums}
+.harp-gb-bar{display:block;height:6px;border-radius:3px;background:var(--ui-accent)}
 .harp-check{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
 .harp-check i{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ui-accent)}
 .harp-check i.warn{background:var(--ui-orange)}
@@ -483,52 +492,77 @@ function ProviderSummary({ provider, title, query, now, onOpen }) {
             h(LeftCell, { row, window: pickWindow(row, WEEK, 1), name: 'week', now }), toks(row), money(row), reqs(row)] })) }))
 }
 
-// A real calendar grid for Month: weeks as rows, Su-Sa columns, date numbers — not 720 hourly cells.
-const CAL_HEADS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
-function MonthGrid({ days, now }) {
-  const n = days.length
-  if (!n) return null
-  const today = new Date(now); today.setHours(0, 0, 0, 0)
-  // Built with the same calendar-day arithmetic as the grid below (never raw ms math), so DST
-  // transitions in the user's timezone can't shift one side by an hour and break the comparison.
-  const dates = Array.from({ length: n }, (_, i) => { const d = new Date(today); d.setDate(d.getDate() - (n - 1 - i)); return d })
-  const start = new Date(dates[0]); start.setDate(start.getDate() - start.getDay())   // the Sunday on/before day 1
-  const totalCells = Math.ceil((dates[0].getDay() + n) / 7) * 7
-  const top = Math.max(0, ...days.map(day => day.tokens.reduce((a, b) => a + b, 0)))
-  const cells = Array.from({ length: totalCells }, (_, p) => {
-    const date = new Date(start); date.setDate(date.getDate() + p)
-    const inRange = date >= dates[0] && date <= dates[n - 1]
-    const index = inRange ? Math.round((date - dates[0]) / 86400000) : -1
-    const isToday = index === n - 1
-    if (!inRange) return h('span', { key: p, className: 'harp-cal-day muted' }, date.getDate())
-    const total = days[index].tokens.reduce((a, b) => a + b, 0)
-    const requests = days[index].requests.reduce((a, b) => a + b, 0)
-    return h('span', { key: p, className: `harp-cal-day${isToday ? ' today' : ''}`,
-      title: `${days[index].dow} ${days[index].date} · ${number.format(total)} tokens in ${number.format(requests)} request${requests === 1 ? '' : 's'}`,
-      style: total ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 60 * total / (top || 1))}%, transparent)` } : undefined
-    }, date.getDate())
-  })
-  return h('div', { className: 'harp-cal' },
-    ...CAL_HEADS.map(label => h('span', { key: label, className: 'harp-cal-head' }, label)),
-    ...cells)
+// Style B: a GitHub-contribution-style grid shared by 24 h / Week / Month, quantized into 5
+// discrete levels (easier to compare at a glance than a continuous gradient), with a Total
+// column per row. Built with the app's --ui-accent so it matches the rest of the HARP UI,
+// not a hardcoded green.
+const LEVEL_STEPS = [0, 0.2, 0.4, 0.65, 0.9]   // level n lights up once value/top passes this share
+function levelOf(value, top) {
+  if (!value || !top) return 0
+  const share = value / top
+  let level = 0
+  for (let i = 1; i < LEVEL_STEPS.length; i++) if (share >= LEVEL_STEPS[i]) level = i
+  return level
+}
+function gridHeat({ heads, rows, now }) {
+  const allValues = rows.flatMap(row => row.cells.filter(Boolean).map(c => c.value))
+  const top = Math.max(0, ...allValues)
+  const rowTotals = rows.map(row => row.cells.reduce((a, c) => a + (c ? c.value : 0), 0))
+  const totalMax = Math.max(1, ...rowTotals)
+  const cols = heads.length
+  return h('div', { className: 'harp-gb-wrap' }, h('div', { className: 'harp-gb', style: { gridTemplateColumns: `56px repeat(${cols}, minmax(0, 1fr)) 76px` } },
+    h('span'), ...heads.map((label, i) => h('span', { key: `h${i}`, className: 'harp-gb-head' }, label)), h('span', { className: 'harp-gb-head' }, 'Total'),
+    ...rows.flatMap((row, ri) => [
+      h('span', { key: `l${ri}`, className: 'harp-gb-row-label' }, row.label),
+      ...row.cells.map((cell, ci) => !cell
+        ? h('i', { key: `${ri}-${ci}`, className: 'harp-gb-cell dashed' })
+        : h('i', { key: `${ri}-${ci}`, className: `harp-gb-cell lvl-${levelOf(cell.value, top)}${cell.ring ? ' ring' : ''}`, title: cell.title, tabIndex: 0 })),
+      h('span', { key: `t${ri}`, className: 'harp-gb-total' },
+        h('i', { className: 'harp-gb-bar', style: { width: `${Math.round(40 * rowTotals[ri] / totalMax)}px` } }),
+        number.format(rowTotals[ri]))])))
 }
 
 function ActivityHeat({ now }) {
   const [span, setSpan] = useState('week')
   const query = useQuery({ queryKey: [ID, 'heat', span], queryFn: () => rest(`/activity/heat?span=${span}`), refetchInterval: 300000 })
   const days = query.data?.days || []
-  const top = Math.max(0, ...days.flatMap(day => day.tokens))
+  const currentHour = new Date(now).getHours()
+  let body = null
+  if (days.length) {
+    if (span === 'month') {
+      const n = days.length
+      const today = new Date(now); today.setHours(0, 0, 0, 0)
+      const dates = Array.from({ length: n }, (_, i) => { const d = new Date(today); d.setDate(d.getDate() - (n - 1 - i)); return d })
+      const start = new Date(dates[0]); start.setDate(start.getDate() - ((start.getDay() + 6) % 7))   // the Monday on/before day 1
+      const weeks = Math.ceil((((dates[0].getDay() + 6) % 7) + n) / 7)
+      const rows = Array.from({ length: weeks }, (_, w) => {
+        const weekStart = new Date(start); weekStart.setDate(weekStart.getDate() + w * 7)
+        return { label: weekStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+          cells: Array.from({ length: 7 }, (_, c) => {
+            const date = new Date(weekStart); date.setDate(date.getDate() + c)
+            const index = date >= dates[0] && date <= dates[n - 1] ? Math.round((date - dates[0]) / 86400000) : -1
+            if (index < 0) return null
+            const day = days[index]
+            const total = day.tokens.reduce((a, b) => a + b, 0)
+            const requests = day.requests.reduce((a, b) => a + b, 0)
+            return { value: total, ring: index === n - 1,
+              title: `${day.dow} ${day.date} · ${number.format(total)} tokens in ${number.format(requests)} request${requests === 1 ? '' : 's'}` }
+          }) }
+      })
+      body = gridHeat({ heads: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], rows, now })
+    } else {
+      const visibleDays = span === 'day' ? days.slice(-1) : days
+      const rows = visibleDays.map((day, i) => ({ label: day.dow,
+        cells: day.tokens.map((value, hr) => ({ value, ring: span === 'day' && hr === currentHour,
+          title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens` })) }))
+      body = gridHeat({ heads: Array.from({ length: 24 }, (_, hr) => hr % 6 ? '' : String(hr).padStart(2, '0')), rows, now })
+    }
+  }
   return h(Section, { title: 'ACTIVITY' },
     h('div', { className: 'harp-tools' }, h('span', { className: 'harp-grow' }),
       h(SegmentedControl, { options: [{ id: 'day', label: '24 h' }, { id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }], value: span, onChange: setSpan })),
     h(QueryState, { query, label: 'activity' }),
-    !days.length ? null : span === 'month' ? h(MonthGrid, { days, now })
-      : h('div', { className: 'harp-heat-wrap' }, h('div', { className: 'harp-heat' },
-        h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
-        ...days.flatMap(day => [h('span', { key: `l${day.date}`, title: day.date }, day.dow),
-          ...day.tokens.map((value, hr) => h('i', { key: `${day.date}-${hr}`, className: 'harp-heat-cell',
-            title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens`,
-            style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))]))))
+    body)
 }
 
 function SummaryView({ onOpen }) {

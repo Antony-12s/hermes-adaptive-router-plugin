@@ -411,6 +411,8 @@ test('summary shows every provider with what is left, plus the tokens card', () 
 
 
 test('activity heat grid sits in Summary with a Week/Month toggle', () => {
+  // Style B: discrete 5-level cells (GitHub-contribution look), a Total column per row,
+  // and the same grid shape for 24 h / Week / Month (hours or weekdays as columns).
   const app = fixture({ configured: false, usage: [] })
   app.results.router = { data: routerData(), refetch() {} }
   app.results.heat = { data: heatData('week'), refetch() {} }
@@ -420,29 +422,38 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   assert.ok(button(app, page, '24 h'))
   assert.ok(button(app, page, 'Week'))
   assert.ok(button(app, page, 'Month'))
-  const cells = app.nodes(page, n => n.props?.className === 'harp-heat-cell')
+  let cells = app.nodes(page, n => n.props?.className?.startsWith('harp-gb-cell'))
   assert.equal(cells.length, 7 * 24)
+  assert.ok(cells.every(c => /harp-gb-cell lvl-[0-4]/.test(c.props.className)))
   const hot = cells.find(c => c.props.title && c.props.title.includes('7,000 tokens'))
   assert.ok(hot)
   assert.match(hot.props.title, /Sat 11-07 22:00/)
+  assert.match(hot.props.className, /lvl-4/)
+  const totals = app.nodes(page, n => n.props?.className === 'harp-gb-total')
+  assert.equal(totals.length, 7)
+  assert.ok(totals.some(t => app.text(t).includes('7,000') || app.text(t).includes('7000')))
 
   app.results.heat = { data: heatData('month'), refetch() {} }
   button(app, page, 'Month').props.onClick()
   page = app.render()
-  assert.equal(app.nodes(page, n => n.props?.className === 'harp-heat-cell').length, 0)
-  const headerText = app.nodes(page, n => n.props?.className === 'harp-cal-head').map(n => n.children[0])
-  assert.deepEqual(headerText, ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'])
-  const ghCells = app.nodes(page, n => n.props?.className?.startsWith('harp-cal-day') && n.props.title)
-  assert.equal(ghCells.length, 30)
-  assert.match(ghCells.at(-1).props.title, /7,000 tokens/)
-  assert.ok(ghCells.at(-1).props.className.includes('today'))
-  const muted = app.nodes(page, n => n.props?.className === 'harp-cal-day muted')
-  assert.ok(muted.length > 0)
+  cells = app.nodes(page, n => n.props?.className?.startsWith('harp-gb-cell'))
+  // Full weeks covering a rolling 30-day window: between 30 and 36 cells, always a multiple of 7,
+  // with exactly (total - 30) dashed pad cells — exact counts shift with which weekday "today" is.
+  assert.ok(cells.length % 7 === 0 && cells.length >= 30 && cells.length <= 36, cells.length)
+  const dashed = cells.filter(c => c.props.className.includes('dashed'))
+  assert.equal(dashed.length, cells.length - 30)
+  const today = cells.find(c => c.props.className.includes('ring'))
+  assert.ok(today)
+  assert.match(today.props.title, /7,000 tokens/)
+  const headerText = app.nodes(page, n => n.props?.className === 'harp-gb-head').map(n => n.children[0]).filter(t => t !== 'Total')
+  assert.deepEqual(headerText, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
 
   app.results.heat = { data: heatData('day'), refetch() {} }
   button(app, page, '24 h').props.onClick()
   page = app.render()
-  assert.equal(app.nodes(page, n => n.props?.className === 'harp-heat-cell').length, 24)
+  cells = app.nodes(page, n => n.props?.className?.startsWith('harp-gb-cell'))
+  assert.equal(cells.length, 24)
+  assert.equal(app.nodes(page, n => n.props?.className === 'harp-gb-total').length, 1)
 })
 
 test('HARP opens on Summary', () => {
