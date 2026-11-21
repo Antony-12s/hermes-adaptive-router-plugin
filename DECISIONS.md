@@ -16,3 +16,4 @@
 - Activity heatmap toggle has a third option, 24 h (single-day, span=day -> combined_chart(..., 1)).
 - Fixed the Activity heatmap overflowing its panel: repeat(24,minmax(8px,1fr)) had a hard pixel floor per column that could exceed the container; changed to minmax(0,1fr) inside an .harp-heat-wrap (overflow-x:auto, max-width:100%) and capped the grid at max-width:760px, matching the Account Pool reference.
 - Fixed a real CSS bug in the heatmap fix above: min-width:100% beats max-width per spec, so the 760px cap never applied and the grid stretched full page width into thin sliver cells. Removed min-width; kept width:100% + max-width:760px so it shrinks on narrow viewports and caps on wide ones.
+- Heatmap row labels show only the day name (Mon, Tue...); the mm-dd date moved to a title tooltip on the label, since consecutive days made the printed date redundant.

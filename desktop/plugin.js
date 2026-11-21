@@ -490,7 +490,7 @@ function ActivityHeat() {
     h(QueryState, { query, label: 'activity' }),
     days.length ? h('div', { className: 'harp-heat-wrap' }, h('div', { className: 'harp-heat' },
       h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
-      ...days.flatMap(day => [h('span', { key: `l${day.date}` }, `${day.dow} ${day.date}`),
+      ...days.flatMap(day => [h('span', { key: `l${day.date}`, title: day.date }, day.dow),
         ...day.tokens.map((value, hr) => h('i', { key: `${day.date}-${hr}`, className: 'harp-heat-cell',
           title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens`,
           style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))]))) : null)
@@ -708,7 +708,7 @@ function HeatMap({ chart }) {
   const top = Math.max(0, ...chart.flatMap(day => day.tokens))
   return h(Section, { title: 'TOKENS BY HOUR, LAST 7 DAYS' }, h('div', { className: 'harp-heat-wrap' }, h('div', { className: 'harp-heat' },
     h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
-    ...chart.flatMap(day => [h('span', { key: `l${day.date}` }, `${day.dow} ${day.date}`),
+    ...chart.flatMap(day => [h('span', { key: `l${day.date}`, title: day.date }, day.dow),
       ...day.tokens.map((value, hr) => h('i', { key: `${day.date}-${hr}`, className: 'harp-heat-cell',
         title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens`,
         style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))]))))
