@@ -335,7 +335,7 @@ function ScheduleDialog({ row, busy, onClose, onSave }) {
     row.schedule && h(Button, { size: 'sm', variant: 'outline', disabled: !!busy, onClick: () => onSave('') }, 'Remove schedule'),
     h(Button, { size: 'sm', 'data-action': 'save-schedule', disabled: !!busy || !every.trim(), onClick: () => onSave(every.trim()) },
       busy ? 'Saving…' : 'Save')) },
-    h('p', null, 'Park this account every week during these hours. HARP checks every 5 minutes with a Windows Task Scheduler task ("HARP Schedule"), and returns the account to rotation when the window ends.'),
+    h('p', null, 'Park this account every week during these hours. HARP checks every 5 minutes with a Windows Task Scheduler task ("HARP Timer"), and returns the account to rotation when the window ends.'),
     h('label', { className: 'harp-field' }, 'Days and hours, such as "mon-fri 09:00-17:00" or "sat,sun 22:00-06:00"'),
     h(Input, { value: every, placeholder: 'mon-fri 09:00-17:00', 'aria-label': 'Schedule', onChange: event => setEvery(event.target.value) }))
 }

@@ -100,7 +100,8 @@ def _find_agent(session_id):
     return None
 
 
-def track_account(session_id=None, provider=None, platform=None, usage=None, **_metadata):
+def track_account(session_id=None, provider=None, platform=None, usage=None, model=None, response_model=None,
+                  **_metadata):
     """post_api_request: count the call's tokens and session against the pool account it used."""
     try:
         agent = _find_agent(str(session_id or "")) if session_id else None
@@ -111,9 +112,19 @@ def track_account(session_id=None, provider=None, platform=None, usage=None, **_
             return
         _sibling("pool_state").record_call(
             _hermes_home() / "harp-activity.sqlite3", pool_provider, entry.label or entry.id,
-            str(session_id), platform or getattr(agent, "platform", "") or "", reported_tokens(usage))
+            str(session_id), platform or getattr(agent, "platform", "") or "", reported_tokens(usage),
+            model=str(response_model or model or getattr(agent, "model", "") or "?").split("/")[-1])
     except Exception:  # noqa: BLE001 - tracking must never break a turn
         pass
+
+
+def read_usage(provider, entry):
+    """Read one pool credential's own usage windows, read-only (no credential repair)."""
+    from agent.account_usage import fetch_account_usage
+    from agent.account_usage_cache import _identity_id_for
+
+    return fetch_account_usage(provider, base_url=entry.runtime_base_url, api_key=entry.runtime_api_key,
+                               read_only=True, identity_id=_identity_id_for(provider, entry))
 
 
 def run_tick(_args=None):
@@ -122,20 +133,23 @@ def run_tick(_args=None):
     from agent.credential_pool import load_pool
 
     state = _sibling("pool_state")
-    for line in state.tick(state.Store(_hermes_home()), load_pool, datetime.now()):
+    store = state.Store(_hermes_home())
+    lines = state.run_timer(store, _hermes_home() / "harp-activity.sqlite3", load_pool, datetime.now(),
+                            read=read_usage, send=_sibling("harp_timer").sender(store.alerts()))
+    for line in lines:
         print(line)
 
 
 def _setup_cli(parser):
     commands = parser.add_subparsers(dest="harp_command")
-    commands.add_parser("tick", help="Apply HARP park schedules now (the HARP timer runs this)")
+    commands.add_parser("tick", help="Run the HARP timer once: park schedules, usage history, alerts")
     parser.set_defaults(func=lambda args: run_tick(args) if args.harp_command == "tick" else parser.print_help())
 
 
 def register(ctx):
     ctx.register_hook("post_api_request", track_account)
     if hasattr(ctx, "register_cli_command"):
-        ctx.register_cli_command(name="harp", help="HARP account schedules: hermes harp tick",
+        ctx.register_cli_command(name="harp", help="HARP account timer: hermes harp tick",
                                  setup_fn=_setup_cli)
     config_path = os.environ.get("HARP_CONFIG")
     if not config_path:

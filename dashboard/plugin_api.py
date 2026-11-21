@@ -68,6 +68,25 @@ def _store():
     return pool_state.Store(_home())
 
 
+def _db():
+    return _home() / "harp-activity.sqlite3"
+
+
+def _log(provider, kind, text):
+    try:
+        pool_state.log_event(_db(), provider, kind, text, "page")
+    except Exception:  # noqa: BLE001 - the log must never fail an action
+        pass
+
+
+def _sync_timer():
+    """Install the HARP Timer while any schedule or alert channel needs it; remove it otherwise."""
+    if pool_state.timer_needed(_store()):
+        timer.install(str(_home()))
+    else:
+        timer.remove()
+
+
 def _is_parked(entry, parked):
     return entry.id in parked or getattr(entry, "last_error_reason", None) == pool_state.PARK_REASON
 
@@ -159,6 +178,8 @@ def pool_park(body: dict):
             pool_state.park(_store(), _pool(provider), provider, entry_id, until, "user")
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
+    label = (_store().parked(provider).get(entry_id) or {}).get("label", entry_id)
+    _log(provider, "park", f"Parked {label}" + (f" until {datetime.fromtimestamp(until):%a %H:%M}" if until else ""))
     return {"ok": True}
 
 
@@ -166,7 +187,10 @@ def pool_park(body: dict):
 def pool_unpark(body: dict):
     provider, entry_id = _target(body)
     with POOL_LOCK:
-        pool_state.unpark(_store(), _pool(provider), provider, entry_id)
+        pool = _pool(provider)
+        label = next((e.label for e in pool.entries() if e.id == entry_id), entry_id)
+        pool_state.unpark(_store(), pool, provider, entry_id)
+    _log(provider, "unpark", f"{label} back in rotation")
     return {"ok": True}
 
 
@@ -182,6 +206,7 @@ def pool_remove(body: dict):
         pool.remove_index(index)
         _store().forget(provider, entry_id)
     LIVE.get(provider, {}).get("accounts", {}).pop(entry_id, None)
+    _log(provider, "remove", f"Removed {entry.label or entry_id}")
     return {"removed": entry.label or entry_id}
 
 
@@ -208,11 +233,10 @@ def pool_schedule(body: dict):
         from agent.credential_pool import load_pool
         from datetime import datetime as _datetime
         changes = pool_state.tick(store, load_pool, _datetime.now())
+    _log(provider, "schedule", f"Schedule for {entry.label or entry_id}: {every}" if every
+         else f"Removed the schedule of {entry.label or entry_id}")
     try:
-        if store.schedules():
-            timer.install(str(_home()))
-        else:
-            timer.remove()
+        _sync_timer()
     except RuntimeError as error:
         return {"ok": True, "changes": changes, "warning": str(error)}
     return {"ok": True, "changes": changes}
@@ -244,6 +268,9 @@ def pool_balance(body: dict):
             return {"changed": False, "message": "No account usage could be read; nothing changed."}
         actions.apply_balance(pool, plan)
     label = {row.id: row.label for row in rows}
+    _log(provider, "balance", "Balanced: " + " > ".join(label[i] for i in plan["order"])
+         + (f"; benched {', '.join(label[i] for i in plan['bench'])}" if plan["bench"] else "")
+         + (f"; released {', '.join(label[i] for i in plan['release'])}" if plan["release"] else ""))
     return {"changed": True, "benched": [label[i] for i in plan["bench"]],
             "released": [label[i] for i in plan["release"]], "order": [label[i] for i in plan["order"]]}
 
@@ -298,6 +325,8 @@ def pool_wake(body: dict):
                 continue
             WAKE_AT[target] = time.time()
             results.append({"account": name, "result": "woke"})
+    if results:
+        _log(provider, "wake", "Wake: " + "; ".join(f"{r['account']} {r['result']}" for r in results))
     return {"results": results}
 
 
@@ -430,6 +459,8 @@ def signin_step(body: dict):
         return {"status": "error", "final": True, "message": "Sign-in finished, but no new account is in the pool."}
     if flow.get("replace"):
         _take_place(flow["provider"], flow["replace"], added[0])
+    _log(flow["provider"], "relogin" if flow.get("replace") else "add",
+         f"{'Signed in again' if flow.get('replace') else 'Added'} {added[0].label}")
     LIVE.pop(flow["provider"], None)
     return {"status": "done", "account": added[0].label}
 
@@ -438,6 +469,82 @@ def signin_step(body: dict):
 def signin_cancel(body: dict):
     _drop_flow(str((body or {}).get("flow") or ""), remove_new=True)
     return {"ok": True}
+
+
+@router.get("/report")
+def get_report(provider: str, hours: float = 24):
+    if provider not in {"anthropic", "jev", "openai-codex"}:
+        raise HTTPException(400, "Unknown HARP provider")
+    if not 0 < hours <= 7 * 24:
+        raise HTTPException(400, "hours must be between 0 and 168.")
+    return pool_state.report(_db(), provider, hours)
+
+
+@router.get("/activity")
+def get_activity(provider: str, hours: float = 24):
+    if provider not in {"anthropic", "jev", "openai-codex"}:
+        raise HTTPException(400, "Unknown HARP provider")
+    if not 0 < hours <= 30 * 24:
+        raise HTTPException(400, "hours must be between 0 and 720.")
+    return {"hours": hours, "events": pool_state.read_events(_db(), provider, time.time() - hours * 3600)}
+
+
+@router.get("/health")
+def get_health(provider: str):
+    """Checks from local state only: no provider call."""
+    if provider not in {"anthropic", "jev", "openai-codex"}:
+        raise HTTPException(400, "Unknown HARP provider")
+    store = _store()
+    pool_key = provider if provider != "jev" or _pool("jev").entries() else "custom:jev"
+    entries = _pool(pool_key).entries()
+    live = LIVE.get(provider) or {}
+    facts = {
+        "now": time.time(), "timer_needed": pool_state.timer_needed(store), "timer_installed": timer.installed(),
+        "last_tick": store.last_tick(), "tracker_last": pool_state.last_seen(_db()),
+        "account_pool_timer": timer.task_exists("Hermes Account Balance"),
+        "live_read_at": live.get("read_at"), "live_ids": set((live.get("accounts") or {}).keys()),
+        "can_read": provider in contract.PROVIDERS,
+        "accounts": [{"id": e.id, "label": e.label or e.id, "status": getattr(e, "last_status", None),
+                      "reason": getattr(e, "last_error_reason", None), "message": getattr(e, "last_error_message", None),
+                      "reset_at": getattr(e, "last_error_reset_at", None)} for e in entries],
+    }
+    active = store.alert_state().get(provider, {})
+    return {"checks": pool_state.health_checks(facts), "timer": {"needed": facts["timer_needed"],
+            "installed": facts["timer_installed"], "last_tick": facts["last_tick"]},
+            "live_read_at": facts["live_read_at"], "alerts": len(active)}
+
+
+@router.get("/alerts")
+def get_alerts(provider: str):
+    store = _store()
+    active = store.alert_state().get(provider, {})
+    return {"settings": store.alerts(), "timer_installed": timer.installed(),
+            "active": sorted(({"key": k, **v} for k, v in active.items()), key=lambda a: a["since"])}
+
+
+@router.post("/alerts")
+def set_alerts(body: dict):
+    changes = {k: v for k, v in (body or {}).items() if k in pool_state.ALERT_DEFAULTS}
+    try:
+        settings = _store().set_alerts(changes)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    for provider in pool_state.TIMER_PROVIDERS:
+        _log(provider, "alert", "Alert settings: " + ", ".join(f"{k} {v}" for k, v in changes.items()))
+    try:
+        _sync_timer()
+    except RuntimeError as error:
+        return {"settings": settings, "warning": str(error)}
+    return {"settings": settings}
+
+
+@router.post("/alerts/test")
+def test_alert(body: dict):
+    settings = _store().alerts()
+    if not (settings["desktop"] or settings["telegram"]):
+        raise HTTPException(400, "Turn on desktop notifications or Telegram first.")
+    sent = timer.sender(settings)("HARP: test alert", "Alerts from HARP arrive here.")
+    return {"sent": sent}
 
 
 @router.get("/usage")
