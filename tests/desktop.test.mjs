@@ -354,3 +354,11 @@ test('feedback and try-it reach the backend', async () => {
   await button(app, page, 'Ask Jev').props.onClick()
   assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/router/try').body)), { text: 'fix my build', use_jev: true })
 })
+
+
+test('clock times are 24-hour', () => {
+  const app = fixture({ configured: false, usage: [] })
+  const text = app.text(app.render())
+  assert.match(text, /Live usage read \d{2}:\d{2}:\d{2}/)
+  assert.doesNotMatch(text, /\b[AP]M\b/)
+})

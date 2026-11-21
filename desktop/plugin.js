@@ -310,7 +310,7 @@ function RowActions({ row, canAct, onAction }) {
 
 function AccountState({ row }) {
   const parts = []
-  if (row.parked) parts.push(row.parked.until ? `parked until ${new Date(row.parked.until * 1000).toLocaleString()}` : 'parked')
+  if (row.parked) parts.push(row.parked.until ? `parked until ${stamp(row.parked.until * 1000, { dateStyle: 'medium', timeStyle: 'short' })}` : 'parked')
   else parts.push(row.status)
   if (row.schedule) parts.push(`schedule ${row.schedule}`)
   return h('span', { className: 'harp-status' }, parts.join(' · '))
@@ -328,7 +328,7 @@ function pickWindow(row, pattern, fallback) {
 
 function resetText(iso) {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  return stamp(iso, { weekday: 'short', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 function KeyCheck({ row }) {
@@ -338,6 +338,9 @@ function KeyCheck({ row }) {
   return h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${works ? '' : ' off'}`, 'aria-hidden': true }),
     works ? `Key works · ${check.ms} ms` : `Key ${check.problem}`)
 }
+
+// Every clock time on the page is 24-hour.
+const stamp = (value, options) => new Date(value).toLocaleString(undefined, { ...options, hourCycle: 'h23' })
 
 // Time left until a usage window resets, counting down ("resets in 3h 50m").
 function countdown(iso, now = Date.now()) {
@@ -553,7 +556,7 @@ function AddDialog({ provider, replace, onClose, onDone }) {
 }
 
 const PERIODS = [{ id: '24', label: '24 hours' }, { id: '72', label: '3 days' }, { id: '168', label: '7 days' }]
-const when = ts => new Date(ts * 1000).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+const when = ts => stamp(ts * 1000, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
 const EVENT_ICON = { balance: 'arrow-swap', alert: 'bell', park: 'debug-pause', unpark: 'debug-start', schedule: 'calendar',
   remove: 'trash', add: 'add', relogin: 'key', wake: 'zap' }
 
@@ -768,7 +771,7 @@ function HarpPage() {
     !diagram && h('div', { className: 'harp-sub' },
       h(SegmentedControl, { options: [{ id: 'usage', label: 'Accounts & usage' }, { id: 'activity', label: 'Activity' },
         { id: 'report', label: 'Report' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }], value: view, onChange: setView }),
-      view === 'usage' && h('span', null, accounts.data?.live_read_at ? `Live usage read ${new Date(accounts.data.live_read_at * 1000).toLocaleTimeString()}` : 'Live usage not read yet')),
+      view === 'usage' && h('span', null, accounts.data?.live_read_at ? `Live usage read ${stamp(accounts.data.live_read_at * 1000, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Live usage not read yet')),
     h('div', { className: 'harp-body' }, diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
       : view === 'activity' ? h(ActivityView, { provider })
         : view === 'report' ? h(ReportView, { provider })
