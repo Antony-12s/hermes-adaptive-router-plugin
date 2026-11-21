@@ -430,9 +430,14 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   button(app, page, 'Month').props.onClick()
   page = app.render()
   assert.equal(app.nodes(page, n => n.props?.className === 'harp-heat-cell').length, 0)
-  const ghCells = app.nodes(page, n => n.props?.className === 'harp-gh-cell' && n.props.title)
+  const headerText = app.nodes(page, n => n.props?.className === 'harp-cal-head').map(n => n.children[0])
+  assert.deepEqual(headerText, ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'])
+  const ghCells = app.nodes(page, n => n.props?.className?.startsWith('harp-cal-day') && n.props.title)
   assert.equal(ghCells.length, 30)
   assert.match(ghCells.at(-1).props.title, /7,000 tokens/)
+  assert.ok(ghCells.at(-1).props.className.includes('today'))
+  const muted = app.nodes(page, n => n.props?.className === 'harp-cal-day muted')
+  assert.ok(muted.length > 0)
 
   app.results.heat = { data: heatData('day'), refetch() {} }
   button(app, page, '24 h').props.onClick()
