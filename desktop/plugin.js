@@ -138,6 +138,8 @@ function AccountState({ row }) {
 
 const SESSION = /session|5\s*h|hour/i
 const WEEK = /week/i
+// Hermes records only failures (exhausted, dead); no recorded error means the account is usable.
+const usable = row => !row.parked && !['exhausted', 'dead'].includes(row.status)
 
 function pickWindow(row, pattern, fallback) {
   const windows = row.usage?.windows || []
@@ -165,7 +167,7 @@ function Accounts({ query, canAct = false, onAction = () => {} }) {
   }, null)
   const topSession = top(SESSION, 0)
   const topWeek = top(WEEK, 1)
-  const inRotation = rows.filter(row => row.status === 'ok' && !row.parked).length
+  const inRotation = rows.filter(row => usable(row)).length
   const tokens = rows.reduce((sum, row) => sum + (row.tokens_24h || 0), 0)
   return h('div', null,
     h(QueryState, { query, label: 'accounts and quota' }),
@@ -180,7 +182,7 @@ function Accounts({ query, canAct = false, onAction = () => {} }) {
             const session = pickWindow(row, SESSION, 0)
             const week = pickWindow(row, WEEK, 1)
             return { key: row.id || index, cells: [index + 1,
-              h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${row.status === 'ok' && !row.parked ? '' : ' off'}`, 'aria-hidden': true }), row.label),
+              h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${usable(row) ? '' : ' off'}`, 'aria-hidden': true }), row.label),
               h(WindowCell, { row, window: session, name: 'session' }),
               h(WindowCell, { row, window: week, name: 'week' }),
               h('span', { className: 'harp-status' }, row.usage ? [

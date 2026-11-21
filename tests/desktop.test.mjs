@@ -59,7 +59,7 @@ function fixture(usage) {
     return matches
   }
   const text = tree => nodes(tree, n => typeof n.type === 'string').flatMap(n => n.children.filter(c => typeof c === 'string')).join(' ')
-  return { registrations, requests, render, nodes, text, slots }
+  return { registrations, requests, render, nodes, text, slots, results }
 }
 
 test('HARP toolbar exposes its own account actions without invoking account-pool', () => {
@@ -155,6 +155,18 @@ test('registers one Desktop page, sidebar entry and palette navigation', () => {
   assert.match(app.text(page), /Local usage collection is off/)
   assert.match(app.text(page), /Personal/)
   assert.equal(app.nodes(page, node => node.props?.className === 'harp-dot').length, 1)
+})
+
+test('an account with no recorded error counts as usable', () => {
+  const app = fixture({ configured: false, usage: [] })
+  for (const status of ['active', 'ok']) {
+    app.results[0].data.accounts[0].status = status
+    const page = app.render()
+    assert.match(app.text(page), /1 \/ 1/, status)
+    assert.equal(app.nodes(page, n => n.props?.className === 'harp-dot').length, 1, status)
+  }
+  app.results[0].data.accounts[0].status = 'exhausted'
+  assert.match(app.text(app.render()), /0 \/ 1/)
 })
 
 test('each account row carries its own session and week quota; no separate provider table', () => {

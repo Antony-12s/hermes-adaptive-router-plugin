@@ -125,7 +125,7 @@ def get_accounts(provider: str):
     accounts = [
         {"id": entry.get("id"), "priority": entry.get("priority"),
          "label": entry.get("label") or "Unnamed account",
-         "status": entry.get("last_status") or "No status recorded",
+         "status": entry.get("last_status") or "active",
          "usage": readings.get(entry.get("id")),
          "tokens_24h": (activity.get(entry.get("label") or entry.get("id")) or {}).get("tokens_24h"),
          "used_by": (activity.get(entry.get("label") or entry.get("id")) or {}).get("used_by", []),
