@@ -78,7 +78,10 @@ account actions for Anthropic and OpenAI Codex pools: **Live usage** (reads each
 credential's usage), **Wake** (Anthropic only; one 1-token request to idle
 accounts), **Balance now** (benches accounts at 90% or more and orders the pool by
 usage), and **Add account** (relays `hermes auth add`). Wake and Balance ask for
-confirmation. Local daily budgets are monitoring thresholds, not provider
+confirmation. Below the provider row, Activity lists what HARP changed, Report breaks
+down tokens by account, model, source and session, Health checks the pool and
+the HARP Timer, and Alerts sends Windows or Telegram notifications at a usage
+threshold. Local daily budgets are monitoring thresholds, not provider
 limits. The Agent and Desktop
 halves are enabled separately. After installing the package, rescan plugins in
 Desktop's Capabilities → Plugins and enable the Desktop half. The backend API

@@ -1,5 +1,5 @@
 // HARP Desktop page: accounts, live usage, balance, wake and sign-in through HARP's own backend.
-import { Button, Codicon, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, host, Input, PALETTE_AREA, ROUTES_AREA, SegmentedControl, SIDEBAR_NAV_AREA, useQuery } from '@hermes/plugin-sdk'
+import { Button, Codicon, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, host, Input, PALETTE_AREA, ROUTES_AREA, SegmentedControl, SIDEBAR_NAV_AREA, Switch, useQuery } from '@hermes/plugin-sdk'
 import { createElement as h, useEffect, useState } from 'react'
 
 const ID = 'harp'
@@ -69,6 +69,19 @@ const CSS = `
 .harp-row-actions button{opacity:.7}
 .harp-row-actions button:hover{opacity:1}
 .harp-dialog label.harp-field{display:block;font-size:.75rem;margin:6px 0 4px;color:var(--ui-text-secondary)}
+.harp-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 8px;font-size:.6875rem;color:var(--ui-text-tertiary)}
+.harp-share{display:inline-block;width:72px;height:5px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;vertical-align:middle;margin-right:6px}
+.harp-share>i{display:block;height:100%;background:var(--ui-accent)}
+.harp-heat{display:grid;grid-template-columns:72px repeat(24,minmax(8px,1fr));gap:2px;font-size:.625rem;color:var(--ui-text-tertiary);margin-top:4px}
+.harp-heat-cell{height:14px;border-radius:2px;background:var(--ui-bg-quaternary)}
+.harp-check{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
+.harp-check i{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ui-accent)}
+.harp-check i.warn{background:var(--ui-orange)}
+.harp-check i.fail{background:var(--ui-red)}
+.harp-setting{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--ui-stroke-tertiary)}
+.harp-setting b{display:block;font-size:.75rem;font-weight:500;color:var(--ui-text-primary)}
+.harp-setting span{font-size:.6875rem;color:var(--ui-text-tertiary)}
+.harp-setting input{width:64px}
 `
 
 function Table({ label, headings, rows }) {
@@ -311,6 +324,133 @@ function AddDialog({ provider, replace, onClose, onDone }) {
     error && h('div', { className: 'harp-error', role: 'alert' }, error))
 }
 
+const PERIODS = [{ id: '24', label: '24 hours' }, { id: '72', label: '3 days' }, { id: '168', label: '7 days' }]
+const when = ts => new Date(ts * 1000).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+const EVENT_ICON = { balance: 'arrow-swap', alert: 'bell', park: 'debug-pause', unpark: 'debug-start', schedule: 'calendar',
+  remove: 'trash', add: 'add', relogin: 'key', wake: 'zap' }
+
+function useView(kind, provider, hours, interval) {
+  return useQuery({ queryKey: [ID, kind, provider, hours], refetchInterval: interval,
+    queryFn: () => rest(`/${kind}?provider=${encodeURIComponent(provider)}${hours ? `&hours=${hours}` : ''}`) })
+}
+
+function ActivityView({ provider }) {
+  const [hours, setHours] = useState('24')
+  const query = useView('activity', provider, hours, 60000)
+  const events = query.data?.events || []
+  return h('div', null,
+    h('div', { className: 'harp-tools' }, h(SegmentedControl, { options: PERIODS, value: hours, onChange: setHours }),
+      'What HARP changed: balance, park, schedules, sign-ins, wake and alerts. Kept 30 days.'),
+    h(QueryState, { query, label: 'activity' }),
+    query.data && (events.length
+      ? h(Table, { label: 'Activity', headings: ['When', 'By', 'What happened'], rows: events.map((e, i) => ({ key: `${e.ts}-${i}`, cells: [
+          when(e.ts), h('span', { className: 'harp-status' }, e.by),
+          h('span', { className: 'harp-account' }, h(Codicon, { name: EVENT_ICON[e.kind] || 'circle-small', size: '0.8rem' }), e.text)] })) })
+      : h('div', { className: 'harp-empty' }, 'Nothing recorded in this period.')))
+}
+
+function GroupTable({ title, label, rows, extra }) {
+  if (!rows?.length) return null
+  return h(Section, { title }, h(Table, { label: title, headings: [label, 'Tokens', 'Share', 'Requests', ...(extra ? extra[0] : [])],
+    rows: rows.map(row => ({ key: row.name, cells: [row.name === '?' ? h('span', { className: 'harp-muted' }, 'not recorded') : row.name,
+      h('span', { className: 'harp-num' }, compact.format(row.tokens)),
+      h('span', null, h('span', { className: 'harp-share' }, h('i', { style: { width: `${Math.min(100, row.share)}%` } })), `${Math.round(row.share)}%`),
+      h('span', { className: 'harp-num' }, number.format(row.requests)), ...(extra ? extra[1](row) : [])] })) }))
+}
+
+function HeatMap({ chart }) {
+  const top = Math.max(0, ...chart.flatMap(day => day.tokens))
+  return h(Section, { title: 'TOKENS BY HOUR, LAST 7 DAYS' }, h('div', { className: 'harp-heat' },
+    h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
+    ...chart.flatMap(day => [h('span', { key: `l${day.date}` }, `${day.dow} ${day.date}`),
+      ...day.tokens.map((value, hr) => h('i', { key: `${day.date}-${hr}`, className: 'harp-heat-cell',
+        title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens`,
+        style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))])))
+}
+
+function ReportView({ provider }) {
+  const [hours, setHours] = useState('24')
+  const query = useView('report', provider, hours, 300000)
+  const data = query.data
+  const busiest = data && data.chart.flatMap(day => day.tokens.map((value, hr) => ({ value, hr }))).reduce((a, b) => (b.value > a.value ? b : a), { value: 0, hr: 0 })
+  return h('div', null,
+    h('div', { className: 'harp-tools' }, h(SegmentedControl, { options: PERIODS, value: hours, onChange: setHours }),
+      'Counted by HARP on this computer. No provider call.'),
+    h(QueryState, { query, label: 'report' }),
+    data && h('div', null,
+      h('div', { className: 'harp-cards' },
+        h(SummaryCard, { title: 'Tokens', value: data.total.tokens ? compact.format(data.total.tokens) : '–', detail: `${number.format(data.total.requests)} requests` }),
+        h(SummaryCard, { title: 'Accounts used', value: String(data.accounts.length), detail: data.accounts[0] ? `most: ${data.accounts[0].name}` : 'none yet' }),
+        h(SummaryCard, { title: 'Busiest hour, 7 days', value: busiest.value ? `${String(busiest.hr).padStart(2, '0')}:00` : '–', detail: busiest.value ? `${compact.format(busiest.value)} tokens` : 'no load yet' }),
+        h(SummaryCard, { title: 'Usage history', value: String(data.snapshots), detail: data.snapshots ? 'snapshots from the HARP Timer' : 'turn on alerts to record it' })),
+      h(GroupTable, { title: 'BY ACCOUNT', label: 'Account', rows: data.accounts, extra: [['Peak', 'Time ≥ 90%'], row => [
+        h('span', { className: 'harp-num' }, row.peak == null ? '–' : `${Math.round(row.peak)}%`),
+        h('span', { className: 'harp-num' }, row.peak == null ? '–' : `${row.hot_min} min`)]] }),
+      h(GroupTable, { title: 'BY MODEL', label: 'Model', rows: data.models }),
+      h(GroupTable, { title: 'BY SOURCE', label: 'Source', rows: data.sources }),
+      data.sessions.length ? h(Section, { title: 'BY SESSION' }, h(Table, { label: 'By session', headings: ['Session', 'Source', 'Account', 'Model', 'Tokens', 'Requests'],
+        rows: data.sessions.map(s => ({ key: s.session, cells: [s.session, s.platform, s.accounts.join(' → '), s.models.join(', '),
+          h('span', { className: 'harp-num' }, compact.format(s.tokens)), h('span', { className: 'harp-num' }, number.format(s.requests))] })) })) : null,
+      h(HeatMap, { chart: data.chart }),
+      !data.total.tokens && h('div', { className: 'harp-empty' }, 'No tokens counted in this period. Sessions started before HARP was enabled count after they restart.')))
+}
+
+function HealthView({ provider }) {
+  const query = useView('health', provider, '', 60000)
+  const data = query.data
+  return h('div', null,
+    h(QueryState, { query, label: 'health' }),
+    data && h('div', null,
+      h('div', { className: 'harp-cards' },
+        h(SummaryCard, { title: 'HARP Timer', value: data.timer.installed ? 'active' : 'off', detail: data.timer.last_tick ? `last run ${when(data.timer.last_tick)}` : data.timer.needed ? 'needed but not installed' : 'not needed' }),
+        h(SummaryCard, { title: 'Last usage read', value: data.live_read_at ? when(data.live_read_at) : 'none', detail: 'Accounts & usage reads it' }),
+        h(SummaryCard, { title: 'Active alerts', value: String(data.alerts), detail: data.alerts ? 'see Alerts' : 'none' }),
+        h(SummaryCard, { title: 'Problems', value: String(data.checks.filter(c => c.level !== 'ok').length), detail: 'from local state, no provider call' })),
+      h('div', { className: 'harp-tools' }, h(Button, { size: 'sm', variant: 'outline', disabled: query.isFetching, onClick: () => query.refetch() },
+        h(Codicon, { name: 'pulse', size: '0.8rem' }), query.isFetching ? 'Checking…' : 'Check again')),
+      h(Section, { title: 'CHECKS' }, ...data.checks.map((c, i) => h('div', { className: 'harp-check', key: i },
+        h('i', { className: c.level === 'ok' ? '' : c.level, 'aria-label': c.level }), h('span', null, c.text))))))
+}
+
+function AlertsView({ provider }) {
+  const query = useView('alerts', provider, '', 60000)
+  const [busy, setBusy] = useState(false)
+  const [threshold, setThreshold] = useState('')
+  const data = query.data
+  const save = async changes => {
+    setBusy(true)
+    try {
+      const result = await post('/alerts', changes)
+      if (result.warning) notify('warning', result.warning)
+      query.refetch()
+    } catch (error) { notify('error', `Alerts: ${failure(error)}`) } finally { setBusy(false) }
+  }
+  const test = async () => {
+    setBusy(true)
+    try { const result = await post('/alerts/test', {}); notify(result.sent.length ? 'success' : 'warning', result.sent.length ? `Test sent: ${result.sent.join(', ')}` : 'No channel delivered the test.') }
+    catch (error) { notify('error', failure(error)) } finally { setBusy(false) }
+  }
+  if (!data) return h(QueryState, { query, label: 'alerts' })
+  const s = data.settings
+  const level = threshold || String(s.threshold)
+  const levelOk = /^\d+$/.test(level) && Number(level) >= 50 && Number(level) <= 100
+  return h('div', null,
+    h('div', { className: 'harp-tools' }, `The HARP Timer reads every account each 5 minutes while a channel is on, and alerts once when a 5-hour window or weekly limit reaches ${s.threshold}%, once when every account is there, and once when an account needs to sign in again.`),
+    h('div', { className: 'harp-setting' }, h('div', { className: 'harp-grow' }, h('b', null, 'Desktop notifications'), h('span', null, 'Windows notifications on this computer.')),
+      h(Switch, { checked: s.desktop, disabled: busy, 'aria-label': 'Desktop notifications', onCheckedChange: value => save({ desktop: value }) })),
+    h('div', { className: 'harp-setting' }, h('div', { className: 'harp-grow' }, h('b', null, 'Telegram'), h('span', null, 'To the Telegram bot\'s home channel through hermes send (send /sethome to the bot first).')),
+      h(Switch, { checked: s.telegram, disabled: busy, 'aria-label': 'Telegram alerts', onCheckedChange: value => save({ telegram: value }) })),
+    h('div', { className: 'harp-setting' }, h('div', { className: 'harp-grow' }, h('b', null, 'Alert at'), h('span', null, 'Usage percent, 50 to 100.')),
+      h(Input, { value: level, disabled: busy, 'aria-label': 'Alert threshold', onChange: event => setThreshold(event.target.value),
+        onBlur: () => { if (levelOk && Number(level) !== s.threshold) save({ threshold: Number(level) }) } }), '%'),
+    h('div', { className: 'harp-tools' }, h(Button, { size: 'sm', variant: 'outline', disabled: busy || !(s.desktop || s.telegram), onClick: test },
+      h(Codicon, { name: 'bell', size: '0.8rem' }), 'Send a test alert'),
+      data.timer_installed ? 'HARP Timer active.' : (s.desktop || s.telegram) ? 'HARP Timer is not installed: save a setting again.' : 'HARP Timer off.'),
+    h(Section, { title: 'ACTIVE NOW' }, data.active.length
+      ? data.active.map(a => h('div', { className: 'harp-check', key: a.key }, h('i', { className: 'warn' }), h('span', { className: 'harp-grow' }, a.text), h('span', { className: 'harp-status' }, `since ${when(a.since)}`)))
+      : h('div', { className: 'harp-empty' }, 'None.')))
+}
+
 function localInput(epoch) {
   const date = new Date(epoch)
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
@@ -348,12 +488,16 @@ function RemoveDialog({ row, busy, onClose, onConfirm }) {
 }
 
 function HarpPage() {
-  const [provider, setProvider] = useState('anthropic')
+  const [top, setTop] = useState('anthropic')
   const [view, setView] = useState('usage')
   const [tag, setTag] = useState('')
   const [dialog, setDialog] = useState(null)
   const [busy, setBusy] = useState('')
   const [target, setTarget] = useState(null)
+  const [lastProvider, setLastProvider] = useState('anthropic')
+  const diagram = top === 'diagram'
+  const provider = diagram ? lastProvider : top
+  const pickTop = value => { setTop(value); if (value !== 'diagram') setLastProvider(value) }
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
   const usage = useQuery({ queryKey: [ID, 'usage'], queryFn: () => rest('/usage'), refetchInterval: 60000 })
   const canAct = ACTION_PROVIDERS.includes(provider)
@@ -381,23 +525,27 @@ function HarpPage() {
   return h('main', { className: 'harp-page' },
     h('header', { className: 'harp-head' },
       h('h1', { className: 'harp-title' }, 'HARP'),
-      accounts.data && h('span', { className: 'harp-pill' }, accounts.data.accounts.length),
+      !diagram && accounts.data && h('span', { className: 'harp-pill' }, accounts.data.accounts.length),
       h(SegmentedControl, { options: [
-        { id: 'anthropic', label: 'anthropic' }, { id: 'jev', label: 'jev' }, { id: 'openai-codex', label: 'openai-codex' }
-      ], value: provider, onChange: setProvider }),
+        { id: 'diagram', label: 'Diagram' }, { id: 'jev', label: 'Type-safe' }, { id: 'anthropic', label: 'anthropic' }, { id: 'openai-codex', label: 'Codex' }
+      ], value: top, onChange: pickTop }),
       h('span', { className: 'harp-grow' }),
-      h(Button, { size: 'sm', variant: 'ghost', 'aria-label': 'Refresh', disabled: accounts.isFetching || usage.isFetching,
+      !diagram && h(Button, { size: 'sm', variant: 'ghost', 'aria-label': 'Refresh', disabled: accounts.isFetching || usage.isFetching,
         onClick: () => { accounts.refetch(); usage.refetch() } }, h(Codicon, { name: 'eye', size: '0.8rem' })),
-      tool('Live usage', 'refresh', { onClick: () => run('Live usage', '/pool/live', { provider }, () => notify('success', 'Live usage updated.')) }),
-      tool('Wake', 'zap', { disabled: provider !== 'anthropic' || !!busy, onClick: () => setDialog('wake') }),
-      tool('Balance now', 'arrow-swap', { variant: 'outline', onClick: () => setDialog('balance') }),
-      tool('Add account', 'add', { variant: 'default', onClick: () => setDialog('add') })),
-    h('div', { className: 'harp-sub' },
-      h(SegmentedControl, { options: [{ id: 'usage', label: 'Accounts & usage' }, { id: 'diagram', label: 'Diagram' }], value: view, onChange: setView }),
-      h('span', null, accounts.data?.live_read_at ? `Live usage read ${new Date(accounts.data.live_read_at * 1000).toLocaleTimeString()}` : 'Live usage not read yet'),
-      h('span', null, '· budgets are local monitoring')),
-    h('div', { className: 'harp-body' }, view === 'diagram' ? h(Diagram) : h('div', null,
-      h(Accounts, { query: accounts, canAct: canAct && !busy, onAction }), h(Usage, { query: usage, tag, setTag }))),
+      !diagram && tool('Live usage', 'refresh', { onClick: () => run('Live usage', '/pool/live', { provider }, () => notify('success', 'Live usage updated.')) }),
+      !diagram && tool('Wake', 'zap', { disabled: provider !== 'anthropic' || !!busy, onClick: () => setDialog('wake') }),
+      !diagram && tool('Balance now', 'arrow-swap', { variant: 'outline', onClick: () => setDialog('balance') }),
+      !diagram && tool('Add account', 'add', { variant: 'default', onClick: () => setDialog('add') })),
+    !diagram && h('div', { className: 'harp-sub' },
+      h(SegmentedControl, { options: [{ id: 'usage', label: 'Accounts & usage' }, { id: 'activity', label: 'Activity' },
+        { id: 'report', label: 'Report' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }], value: view, onChange: setView }),
+      view === 'usage' && h('span', null, accounts.data?.live_read_at ? `Live usage read ${new Date(accounts.data.live_read_at * 1000).toLocaleTimeString()}` : 'Live usage not read yet')),
+    h('div', { className: 'harp-body' }, diagram ? h(Diagram)
+      : view === 'activity' ? h(ActivityView, { provider })
+        : view === 'report' ? h(ReportView, { provider })
+          : view === 'health' ? h(HealthView, { provider })
+            : view === 'alerts' ? h(AlertsView, { provider })
+              : h('div', null, h(Accounts, { query: accounts, canAct: canAct && !busy, onAction }), h(Usage, { query: usage, tag, setTag }))),
     target?.type === 'relogin' && h(AddDialog, { provider, replace: target.row, onClose: closeTarget, onDone: () => { closeTarget(); accounts.refetch() } }),
     target?.type === 'park' && h(ParkDialog, { row: target.row, busy, onClose: closeTarget,
       onConfirm: until => run('Park', '/pool/park', { provider, id: target.row.id, until }, () => notify('success', `Parked ${target.row.label}.`)) }),

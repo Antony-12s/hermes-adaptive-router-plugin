@@ -32,7 +32,12 @@ function fixture(usage) {
     useEffect: () => {},
     SegmentedControl: ({ options, value, onChange }) => ({ type: 'div', props: { role: 'group' },
       children: options.map(option => ({ type: 'button', props: { onClick: () => onChange(option.id), 'aria-pressed': value === option.id }, children: [option.label] })) }),
-    useQuery: options => { requests.push(options); return options.queryKey[1] === 'usage' ? results[1] : results[0] },
+    useQuery: options => {
+      requests.push(options)
+      const kind = options.queryKey[1]
+      return kind === 'usage' ? results[1] : kind === 'accounts' ? results[0] : (results[kind] || { data: undefined })
+    },
+    Switch: props => ({ type: 'switch', props, children: [] }),
     useState: initial => { const slot = index++; return [slots[slot] ?? initial, value => { slots[slot] = value }] },
     h: (type, props, ...children) => ({ type, props: props || {}, children }),
     console
@@ -194,8 +199,53 @@ test('filters tagged usage, shows budgets, switches provider without losing quer
   page = app.render()
   assert.match(app.text(page), /fast/)
   assert.doesNotMatch(app.text(page), /main/)
-  app.nodes(page, n => n.type === 'button' && n.children.includes('jev'))[0].props.onClick()
+  app.nodes(page, n => n.type === 'button' && n.children.includes('Type-safe'))[0].props.onClick()
   app.render()
   assert.equal(app.requests.findLast(x => x?.queryKey?.[1] === 'accounts').queryKey[2], 'jev')
   assert.equal(app.requests.findLast(x => x?.queryKey?.[1] === 'usage').queryKey.length, 2)
+})
+
+const tab = (app, label) => app.nodes(app.render(), n => n.type === 'button' && n.children.includes(label))[0]
+
+test('top row picks Diagram or a provider; the second row holds the five views', () => {
+  const app = fixture({ configured: false, usage: [] })
+  const page = app.render()
+  const groups = JSON.parse(JSON.stringify(app.nodes(page, n => n.props?.role === 'group').map(g => g.children.map(b => b.children[0]))))
+  assert.deepEqual(groups[0], ['Diagram', 'Type-safe', 'anthropic', 'Codex'])
+  assert.deepEqual(groups[1], ['Accounts & usage', 'Activity', 'Report', 'Health', 'Alerts'])
+  tab(app, 'Diagram').props.onClick()
+  const diagram = app.render()
+  assert.match(app.text(diagram), /REQUEST FLOW/)
+  assert.equal(app.nodes(diagram, n => n.props?.role === 'group').length, 1)
+  assert.equal(app.nodes(diagram, n => n.type === 'button' && n.children.includes('Add account')).length, 0)
+  tab(app, 'Codex').props.onClick()
+  app.render()
+  assert.equal(app.requests.findLast(x => x?.queryKey?.[1] === 'accounts').queryKey[2], 'openai-codex')
+})
+
+test('activity, report, health and alerts render their own data', async () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.activity = { data: { events: [{ ts: 1795270000, kind: 'park', by: 'page', text: 'Parked Personal' }] } }
+  app.results.report = { data: { hours: 24, total: { tokens: 1200, requests: 3 }, snapshots: 0,
+    accounts: [{ name: 'Personal', tokens: 1200, requests: 3, share: 100, peak: null, hot_min: 0 }],
+    models: [{ name: 'claude-opus', tokens: 1200, requests: 3, share: 100 }], sources: [{ name: 'desktop', tokens: 1200, requests: 3, share: 100 }],
+    sessions: [{ session: 's1', platform: 'desktop', accounts: ['Personal'], models: ['claude-opus'], tokens: 1200, requests: 3, first: 1, last: 2 }],
+    chart: Array.from({ length: 7 }, (_, i) => ({ date: `11-${i}`, dow: 'Mon', tokens: Array(24).fill(i), requests: Array(24).fill(0) })) } }
+  app.results.health = { data: { checks: [{ level: 'warn', text: 'Tracker: no call counted in 24 h' }], timer: { needed: false, installed: false, last_tick: null }, live_read_at: null, alerts: 0 } }
+  app.results.alerts = { data: { settings: { desktop: false, telegram: false, threshold: 90 }, timer_installed: false, active: [{ key: 'session:Personal', text: 'Personal 5-hour window at 95%', since: 1 }] } }
+
+  tab(app, 'Activity').props.onClick()
+  assert.match(app.text(app.render()), /Parked Personal/)
+  tab(app, 'Report').props.onClick()
+  let page = app.render()
+  assert.match(app.text(page), /claude-opus/)
+  assert.match(app.text(page), /BY SESSION/)
+  assert.equal(app.nodes(page, n => n.props?.className === 'harp-heat-cell').length, 7 * 24)
+  tab(app, 'Health').props.onClick()
+  assert.match(app.text(app.render()), /Tracker: no call counted/)
+  tab(app, 'Alerts').props.onClick()
+  page = app.render()
+  assert.match(app.text(page), /Personal 5-hour window at 95%/)
+  await app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Desktop notifications')[0].props.onCheckedChange(true)
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/alerts').body)), { desktop: true })
 })
