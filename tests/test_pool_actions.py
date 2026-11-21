@@ -49,6 +49,9 @@ class BalancePlanTests(unittest.TestCase):
         self.assertEqual(plan["order"], ["c", "e", "a", "b", "d"])
 
     def test_never_benches_whole_pool_below_full_and_skips_without_readings(self):
+        rows = [Row("p", "p", 0, "parked", (99, None), False), Row("a", "a", 1, "ok", (10, None), False)]
+        plan = plan_balance(rows)
+        self.assertEqual((plan["bench"], plan["order"]), ([], ["a", "p"]))
         rows = [Row("a", "a", 0, "ok", (92, None), False), Row("b", "b", 1, "ok", (100, None), False)]
         self.assertEqual(plan_balance(rows)["bench"], ["b"])
         self.assertIsNone(plan_balance([Row("a", "a", 0, "ok", None, False)]))

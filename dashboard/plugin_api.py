@@ -33,6 +33,8 @@ def _sibling(name):
 contract = _sibling("action_contract")
 actions = _sibling("pool_actions")
 relay_mod = _sibling("signin_relay")
+pool_state = _sibling("pool_state")
+timer = _sibling("harp_timer")
 
 POOL_LOCK = threading.Lock()
 LIVE = {}            # provider -> {"read_at": epoch, "accounts": {entry id: reading}}
@@ -54,6 +56,20 @@ def _pool(provider):
     from agent.credential_pool import load_pool
 
     return load_pool(provider)
+
+
+def _home():
+    from hermes_constants import get_hermes_home
+
+    return get_hermes_home()
+
+
+def _store():
+    return pool_state.Store(_home())
+
+
+def _is_parked(entry, parked):
+    return entry.id in parked or getattr(entry, "last_error_reason", None) == pool_state.PARK_REASON
 
 
 def _read_usage(provider, entry):
@@ -100,11 +116,21 @@ def get_accounts(provider: str):
         entries = read_credential_pool("custom:jev")
     live = LIVE.get(provider) or {}
     readings = live.get("accounts", {})
+    store = _store()
+    parked, schedules = store.parked(provider), store.schedules(provider)
+    try:
+        activity = pool_state.account_activity(_home() / "harp-activity.sqlite3", provider)
+    except Exception:  # noqa: BLE001 - activity is informational
+        activity = {}
     accounts = [
         {"id": entry.get("id"), "priority": entry.get("priority"),
          "label": entry.get("label") or "Unnamed account",
          "status": entry.get("last_status") or "No status recorded",
-         "usage": readings.get(entry.get("id"))}
+         "usage": readings.get(entry.get("id")),
+         "tokens_24h": (activity.get(entry.get("label") or entry.get("id")) or {}).get("tokens_24h"),
+         "used_by": (activity.get(entry.get("label") or entry.get("id")) or {}).get("used_by", []),
+         "parked": parked.get(entry.get("id")),
+         "schedule": (schedules.get(entry.get("id")) or {}).get("every")}
         for entry in sorted((e for e in entries if isinstance(e, dict)),
                             key=lambda e: e.get("priority") if isinstance(e.get("priority"), int) else 10**6)
     ]
@@ -122,7 +148,87 @@ def get_accounts(provider: str):
                     "used_percent": percent if percent is not None and math.isfinite(percent) else None,
                     "reset_at": window.reset_at.isoformat() if window.reset_at else None,
                 })
-    return {"accounts": accounts, "windows": windows, "live_read_at": live.get("read_at")}
+    return {"accounts": accounts, "windows": windows, "live_read_at": live.get("read_at"),
+            "timer": bool(schedules) and timer.installed()}
+
+
+def _target(body):
+    provider = _provider(body)
+    entry_id = str((body or {}).get("id") or "")
+    if not entry_id:
+        raise HTTPException(400, "Choose an account.")
+    return provider, entry_id
+
+
+@router.post("/pool/park")
+def pool_park(body: dict):
+    """Hold an account out of rotation until `until` (epoch seconds) or until it is unparked."""
+    provider, entry_id = _target(body)
+    until = (body or {}).get("until")
+    if until is not None and (not isinstance(until, (int, float)) or until <= time.time()):
+        raise HTTPException(400, "Choose a time in the future, or no end time.")
+    with POOL_LOCK:
+        try:
+            pool_state.park(_store(), _pool(provider), provider, entry_id, until, "user")
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+    return {"ok": True}
+
+
+@router.post("/pool/unpark")
+def pool_unpark(body: dict):
+    provider, entry_id = _target(body)
+    with POOL_LOCK:
+        pool_state.unpark(_store(), _pool(provider), provider, entry_id)
+    return {"ok": True}
+
+
+@router.post("/pool/remove")
+def pool_remove(body: dict):
+    """Delete an account's saved login from Hermes' pool."""
+    provider, entry_id = _target(body)
+    with POOL_LOCK:
+        pool = _pool(provider)
+        index, entry, error = pool.resolve_target(entry_id)
+        if entry is None or entry.id != entry_id:
+            raise HTTPException(400, error or "That account is not in the pool.")
+        pool.remove_index(index)
+        _store().forget(provider, entry_id)
+    LIVE.get(provider, {}).get("accounts", {}).pop(entry_id, None)
+    return {"removed": entry.label or entry_id}
+
+
+@router.post("/pool/schedule")
+def pool_schedule(body: dict):
+    """Set (every="mon-fri 09:00-17:00") or clear (every="") an account's weekly park schedule."""
+    provider, entry_id = _target(body)
+    every = str((body or {}).get("every") or "").strip()
+    store = _store()
+    with POOL_LOCK:
+        pool = _pool(provider)
+        entry = next((e for e in pool.entries() if e.id == entry_id), None)
+        if entry is None:
+            raise HTTPException(400, "That account is not in the pool.")
+        if every:
+            try:
+                store.set_schedule(provider, entry_id, entry.label or entry_id, every)
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from error
+        else:
+            store.drop_schedule(provider, entry_id)
+            if (store.parked(provider).get(entry_id) or {}).get("by") == "schedule":
+                pool_state.unpark(store, pool, provider, entry_id)
+        from agent.credential_pool import load_pool
+        from datetime import datetime as _datetime
+        changes = pool_state.tick(store, load_pool, _datetime.now())
+    try:
+        if store.schedules():
+            timer.install(str(_home()))
+        else:
+            timer.remove()
+    except RuntimeError as error:
+        return {"ok": True, "changes": changes, "warning": str(error)}
+    return {"ok": True, "changes": changes}
 
 
 @router.post("/pool/live")
@@ -141,7 +247,9 @@ def pool_balance(body: dict):
     with POOL_LOCK:
         pool = _pool(provider)
         snapshots = _read_all(provider, pool)
-        rows = [actions.Row(e.id, e.label or e.id, e.priority, getattr(e, "last_status", None),
+        parked = _store().parked(provider)
+        rows = [actions.Row(e.id, e.label or e.id, e.priority,
+                            "parked" if _is_parked(e, parked) else getattr(e, "last_status", None),
                             actions.account_peak(snapshots.get(e.id)), actions.benched_by_harp(e))
                 for e in pool.entries()]
         plan = actions.plan_balance(rows)
@@ -183,6 +291,9 @@ def pool_wake(body: dict):
             name = (entry.label or target) if entry else target
             if entry is None or getattr(entry, "last_status", None) == "dead":
                 results.append({"account": name, "result": "skipped: not usable"})
+                continue
+            if getattr(entry, "last_error_reason", None) == pool_state.PARK_REASON:
+                results.append({"account": name, "result": "skipped: parked"})
                 continue
             if time.time() - WAKE_AT.get(target, 0) < WAKE_COOLDOWN:
                 results.append({"account": name, "result": "skipped: woken in the last 10 minutes"})
@@ -249,14 +360,21 @@ def _expire_flows():
 
 @router.post("/signin/start")
 def signin_start(body: dict):
-    """Start Hermes' own `hermes auth add` and return the sign-in link or device code."""
+    """Start Hermes' own `hermes auth add` and return the sign-in link or device code.
+
+    With "replace": <entry id> it signs that account in again: the new login takes the old
+    one's label, position and schedule, and the old login is deleted only after success."""
     _expire_flows()
     provider = _provider(body)
-    label = str((body or {}).get("label") or "").strip()
+    pool = _pool(provider)
+    replace_id = str((body or {}).get("replace") or "")
+    old = next((e for e in pool.entries() if e.id == replace_id), None) if replace_id else None
+    if replace_id and old is None:
+        raise HTTPException(400, "That account is not in the pool.")
+    label = (old.label or old.id) if old else str((body or {}).get("label") or "").strip()
     if not label:
         raise HTTPException(400, "Enter a name for the account, such as its email.")
-    pool = _pool(provider)
-    if any((e.label or "").lower() == label.lower() for e in pool.entries()):
+    if not old and any((e.label or "").lower() == label.lower() for e in pool.entries()):
         raise HTTPException(400, "An account with this name is already in the pool.")
     relay = relay_mod.Relay(_hermes_command(provider, label), _hermes_env())
     info = relay.wait_for(relay_mod.parse, 90)
@@ -266,8 +384,25 @@ def signin_start(body: dict):
         raise HTTPException(502, f"Could not start the sign-in: {reason}")
     flow_id = secrets.token_urlsafe(16)
     FLOWS[flow_id] = {"relay": relay, "info": info, "provider": provider, "label": label,
-                      "before": {e.id for e in pool.entries()}, "created": time.time(), "lock": threading.Lock()}
+                      "before": {e.id for e in pool.entries()}, "created": time.time(), "lock": threading.Lock(),
+                      "replace": old.id if old else None}
     return {"flow": flow_id, **info, "label": label, "expires_in": SIGNIN_TTL}
+
+
+def _take_place(provider, old_id, new_entry):
+    """After a successful sign-in again: delete the old login, move the new one to its position."""
+    store = _store()
+    with POOL_LOCK:
+        pool = _pool(provider)
+        index, old, _ = pool.resolve_target(old_id)
+        if old is None or old.id != old_id:
+            return
+        pool.remove_index(index)
+        pool.move_entry(new_entry.id, old.priority)
+        schedule = store.schedules(provider).get(old_id)
+        store.forget(provider, old_id)
+        if schedule:
+            store.set_schedule(provider, new_entry.id, schedule["label"], schedule["every"])
 
 
 @router.post("/signin/step")
@@ -306,6 +441,8 @@ def signin_step(body: dict):
     added = [e for e in _pool(flow["provider"]).entries() if e.id not in flow["before"]]
     if not added:
         return {"status": "error", "final": True, "message": "Sign-in finished, but no new account is in the pool."}
+    if flow.get("replace"):
+        _take_place(flow["provider"], flow["replace"], added[0])
     LIVE.pop(flow["provider"], None)
     return {"status": "done", "account": added[0].label}
 

@@ -12,7 +12,7 @@ function fixture(usage) {
   const slots = ['anthropic', 'usage', '']
   let index = 0
   const results = [
-    { data: { accounts: [{ id: 'acc-1', label: 'Personal', status: 'ok', usage: { peak: 40, windows: [] } }], windows: [{ label: '5h', used_percent: 25, reset_at: null }] }, refetch() {} },
+    { data: { accounts: [{ id: 'acc-1', label: 'Personal', status: 'ok', usage: { peak: 40, windows: [] }, tokens_24h: 32500000, used_by: [] }], windows: [{ label: '5h', used_percent: 25, reset_at: null }] }, refetch() {} },
     { data: usage, refetch() {} }
   ]
   const pass = type => ({ children, ...props }) => ({ type, props, children: children || [] })
@@ -109,6 +109,29 @@ test('add account starts Hermes sign-in with the entered name', async () => {
   page = app.render()
   await app.nodes(page, n => n.props?.['data-action'] === 'start-signin')[0].props.onClick()
   assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/signin/start').body)), { provider: 'anthropic', label: 'me@example.com' })
+})
+
+test('account rows show 24 h tokens, sessions and their own row actions', async () => {
+  const app = fixture({ configured: false, usage: [] })
+  let page = app.render()
+  assert.match(app.text(page), /32\.5M/)
+  assert.match(app.text(page), /idle/)
+  const rowButton = label => app.nodes(app.render(), n => n.type === 'button' && n.props['aria-label'] === `${label}: Personal`)[0]
+  for (const label of ['Sign in again', 'Park', 'Schedule', 'Remove']) assert.ok(rowButton(label), label)
+
+  rowButton('Remove').props.onClick()
+  page = app.render()
+  assert.equal(app.requests.some(r => r?.path === '/pool/remove'), false)
+  await app.nodes(page, n => n.props?.['data-action'] === 'confirm-remove')[0].props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/pool/remove').body)), { provider: 'anthropic', id: 'acc-1' })
+
+  rowButton('Park').props.onClick()
+  await app.nodes(app.render(), n => n.props?.['data-action'] === 'confirm-park')[0].props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/pool/park').body)), { provider: 'anthropic', id: 'acc-1', until: null })
+
+  rowButton('Sign in again').props.onClick()
+  await app.nodes(app.render(), n => n.props?.['data-action'] === 'start-signin')[0].props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/signin/start').body)), { provider: 'anthropic', replace: 'acc-1' })
 })
 
 test('account actions are disabled for providers HARP cannot manage', () => {

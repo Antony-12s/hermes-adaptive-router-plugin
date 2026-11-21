@@ -43,3 +43,16 @@ class UsageTests(unittest.TestCase):
         for usage in (None, {"total_tokens": True}, {"input_tokens": 5}):
             with self.subTest(usage=usage):
                 self.assertIsNone(harp.reported_tokens(usage))
+
+    def test_tracker_counts_tokens_against_the_pool_account_of_the_session(self):
+        from types import SimpleNamespace
+
+        entry = SimpleNamespace(id="e1", label="work@example.com")
+        pool = SimpleNamespace(provider="anthropic", current=lambda: entry)
+        agent = SimpleNamespace(_credential_pool=pool, session_id="s-1", platform="desktop")  # noqa: F841 - found on the stack
+        with tempfile.TemporaryDirectory() as directory, patch.object(harp, "_hermes_home", return_value=Path(directory)):
+            harp.track_account(session_id="s-1", provider="anthropic", platform="desktop", usage={"total_tokens": 42})
+            harp.track_account(session_id="s-1", provider="openai-codex", usage={"total_tokens": 99})  # fallback call
+            harp.track_account(session_id="other", provider="anthropic", usage={"total_tokens": 7})
+            activity = harp._sibling("pool_state").account_activity(Path(directory) / "harp-activity.sqlite3", "anthropic")
+        self.assertEqual(activity, {"work@example.com": {"tokens_24h": 42, "used_by": ["desktop"]}})

@@ -6,6 +6,7 @@ const ID = 'harp'
 const ROUTE = '/harp'
 const ACTION_PROVIDERS = ['anthropic', 'openai-codex']
 const number = new Intl.NumberFormat()
+const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
 let rest
 let openExternal
 const post = (path, body) => rest(path, { method: 'POST', body, timeoutMs: 180000 })
@@ -61,6 +62,11 @@ const CSS = `
 .harp-picks label{display:flex;align-items:center;gap:8px;font-size:.75rem}
 .harp-error{color:var(--ui-red);font-size:.75rem;margin-top:6px}
 .harp-link{word-break:break-all;font-size:.6875rem;color:var(--ui-text-tertiary)}
+.harp-num{display:block;text-align:right;font-variant-numeric:tabular-nums;color:var(--ui-text-primary)}
+.harp-row-actions{display:flex;justify-content:flex-end;gap:2px;color:var(--ui-text-tertiary)}
+.harp-row-actions button{opacity:.7}
+.harp-row-actions button:hover{opacity:1}
+.harp-dialog label.harp-field{display:block;font-size:.75rem;margin:6px 0 4px;color:var(--ui-text-secondary)}
 `
 
 function Table({ label, headings, rows }) {
@@ -110,7 +116,25 @@ function Diagram() {
       h('div', null, h('strong', null, title), h('p', null, detail))))))
 }
 
-function Accounts({ query }) {
+function RowActions({ row, canAct, onAction }) {
+  const icon = (name, label, type) => h(Button, { size: 'sm', variant: 'ghost', title: label, 'aria-label': `${label}: ${row.label}`,
+    disabled: !canAct || !row.id, onClick: () => onAction(type, row) }, h(Codicon, { name, size: '0.85rem' }))
+  return h('span', { className: 'harp-row-actions' },
+    icon('key', 'Sign in again', 'relogin'),
+    row.parked ? icon('debug-start', 'Unpark', 'unpark') : icon('debug-pause', 'Park', 'park'),
+    icon('calendar', row.schedule ? `Schedule: ${row.schedule}` : 'Schedule', 'schedule'),
+    icon('trash', 'Remove', 'remove'))
+}
+
+function AccountState({ row }) {
+  const parts = []
+  if (row.parked) parts.push(row.parked.until ? `parked until ${new Date(row.parked.until * 1000).toLocaleString()}` : 'parked')
+  else parts.push(row.status)
+  if (row.schedule) parts.push(`schedule ${row.schedule}`)
+  return h('span', { className: 'harp-status' }, parts.join(' · '))
+}
+
+function Accounts({ query, canAct = false, onAction = () => {} }) {
   const data = query.data
   return h('div', null,
     h(QueryState, { query, label: 'accounts and quota' }),
@@ -128,11 +152,14 @@ function Accounts({ query }) {
           })
         })),
       h(Section, { title: 'POOL ACCOUNTS' }, data.accounts.length
-        ? h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Live usage', 'Recorded status'], rows: data.accounts.map((row, index) => ({
+        ? h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Live usage', 'Tokens, 24 h', 'Used by', 'State', ''], rows: data.accounts.map((row, index) => ({
             key: row.id || index, cells: [index + 1,
-              h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${row.status === 'ok' ? '' : ' off'}`, 'aria-hidden': true }), row.label),
+              h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${row.status === 'ok' && !row.parked ? '' : ' off'}`, 'aria-hidden': true }), row.label),
               row.usage ? h(Meter, { percent: row.usage.peak, label: `${row.label} live usage` }) : h('span', { className: 'harp-muted' }, 'Not read yet'),
-              h('span', { className: 'harp-status' }, row.status)]
+              h('span', { className: 'harp-num' }, row.tokens_24h ? compact.format(row.tokens_24h) : '–'),
+              h('span', { className: 'harp-status' }, row.used_by?.length ? row.used_by.join(', ') : 'idle'),
+              h(AccountState, { row }),
+              h(RowActions, { row, canAct, onAction })]
           })) })
         : h('div', { className: 'harp-empty' }, 'No accounts configured for this provider.')),
       h(Section, { title: 'PROVIDER QUOTA' },
@@ -213,7 +240,7 @@ function WakeDialog({ accounts, busy, onClose, onConfirm }) {
     !usable.length && h('p', null, 'No usable accounts.'))
 }
 
-function AddDialog({ provider, onClose, onDone }) {
+function AddDialog({ provider, replace, onClose, onDone }) {
   const [label, setLabel] = useState('')
   const [flow, setFlow] = useState(null)
   const [code, setCode] = useState('')
@@ -234,14 +261,16 @@ function AddDialog({ provider, onClose, onDone }) {
   }
   const cancel = () => { if (flow) post('/signin/cancel', { flow: flow.flow }).catch(() => {}); onClose() }
   const footer = !flow
-    ? h(Button, { size: 'sm', 'data-action': 'start-signin', disabled: busy || !label.trim(),
-        onClick: () => act('/signin/start', { provider, label: label.trim() }, setFlow) }, busy ? 'Starting…' : 'Start sign-in')
+    ? h(Button, { size: 'sm', 'data-action': 'start-signin', disabled: busy || (!replace && !label.trim()),
+        onClick: () => act('/signin/start', replace ? { provider, replace: replace.id } : { provider, label: label.trim() }, setFlow) },
+        busy ? 'Starting…' : 'Start sign-in')
     : flow.kind === 'code'
       ? h(Button, { size: 'sm', 'data-action': 'finish-signin', disabled: busy || !code.trim(),
           onClick: () => act('/signin/step', { flow: flow.flow, code }, finish) }, busy ? 'Checking…' : 'Finish')
       : null
-  return h(ActionDialog, { title: `Add ${provider} account`, onClose: cancel, footer },
-    !flow && h('div', null,
+  return h(ActionDialog, { title: replace ? `Sign in again: ${replace.label}` : `Add ${provider} account`, onClose: cancel, footer },
+    !flow && replace && h('p', null, 'Hermes signs this account in again. The new login keeps its name, position and schedule; the old login is deleted only after the sign-in succeeds. Sign in with the same account.'),
+    !flow && !replace && h('div', null,
       h('p', null, 'Hermes signs the account in and saves it in its pool. Use the account email as the name.'),
       h(Input, { value: label, placeholder: 'name@example.com', 'aria-label': 'Account name', onChange: event => setLabel(event.target.value) })),
     flow?.kind === 'code' && h('div', null,
@@ -257,21 +286,63 @@ function AddDialog({ provider, onClose, onDone }) {
     error && h('div', { className: 'harp-error', role: 'alert' }, error))
 }
 
+function localInput(epoch) {
+  const date = new Date(epoch)
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+}
+
+function ParkDialog({ row, busy, onClose, onConfirm }) {
+  const [until, setUntil] = useState('')
+  const when = until ? new Date(until).getTime() : null
+  const invalid = when !== null && !(when > Date.now())
+  return h(ActionDialog, { title: `Park ${row.label}`, onClose, footer:
+    h(Button, { size: 'sm', 'data-action': 'confirm-park', disabled: !!busy || invalid,
+      onClick: () => onConfirm(when ? Math.floor(when / 1000) : null) }, busy ? 'Parking…' : 'Park') },
+    h('p', null, 'A parked account stays in the pool with its login but is out of rotation: new sessions do not start on it. Running sessions keep their account.'),
+    h('label', { className: 'harp-field' }, 'Return automatically at (empty: stay parked until you unpark it)'),
+    h(Input, { type: 'datetime-local', value: until, min: localInput(Date.now()), 'aria-label': 'Park until', onChange: event => setUntil(event.target.value) }),
+    invalid && h('div', { className: 'harp-error', role: 'alert' }, 'Choose a time in the future.'))
+}
+
+function ScheduleDialog({ row, busy, onClose, onSave }) {
+  const [every, setEvery] = useState(row.schedule || '')
+  return h(ActionDialog, { title: `Schedule for ${row.label}`, onClose, footer: h('span', { className: 'harp-row-actions' },
+    row.schedule && h(Button, { size: 'sm', variant: 'outline', disabled: !!busy, onClick: () => onSave('') }, 'Remove schedule'),
+    h(Button, { size: 'sm', 'data-action': 'save-schedule', disabled: !!busy || !every.trim(), onClick: () => onSave(every.trim()) },
+      busy ? 'Saving…' : 'Save')) },
+    h('p', null, 'Park this account every week during these hours. HARP checks every 5 minutes with a Windows Task Scheduler task ("HARP Schedule"), and returns the account to rotation when the window ends.'),
+    h('label', { className: 'harp-field' }, 'Days and hours, such as "mon-fri 09:00-17:00" or "sat,sun 22:00-06:00"'),
+    h(Input, { value: every, placeholder: 'mon-fri 09:00-17:00', 'aria-label': 'Schedule', onChange: event => setEvery(event.target.value) }))
+}
+
+function RemoveDialog({ row, busy, onClose, onConfirm }) {
+  return h(ActionDialog, { title: `Remove ${row.label}?`, onClose, footer:
+    h(Button, { size: 'sm', variant: 'destructive', 'data-action': 'confirm-remove', disabled: !!busy, onClick: onConfirm },
+      busy ? 'Removing…' : 'Remove') },
+    h('p', null, 'Its saved login is deleted from Hermes\' pool. To use it again, sign in again with Add account. To pause it instead, park it.'))
+}
+
 function HarpPage() {
   const [provider, setProvider] = useState('anthropic')
   const [view, setView] = useState('usage')
   const [tag, setTag] = useState('')
   const [dialog, setDialog] = useState(null)
   const [busy, setBusy] = useState('')
+  const [target, setTarget] = useState(null)
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
   const usage = useQuery({ queryKey: [ID, 'usage'], queryFn: () => rest('/usage'), refetchInterval: 60000 })
   const canAct = ACTION_PROVIDERS.includes(provider)
   const run = async (name, path, body, report) => {
     setBusy(name)
-    try { report(await post(path, body)); setDialog(null); accounts.refetch() }
+    try { report(await post(path, body)); setDialog(null); setTarget(null); accounts.refetch() }
     catch (error) { notify('error', `${name} failed: ${failure(error)}`) }
     finally { setBusy('') }
   }
+  const onAction = (type, row) => {
+    if (type === 'unpark') return run('Unpark', '/pool/unpark', { provider, id: row.id }, () => notify('success', `${row.label} is back in rotation.`))
+    setTarget({ type, row })
+  }
+  const closeTarget = () => setTarget(null)
   const tool = (label, icon, props) => h(Button, { size: 'sm', variant: 'ghost', disabled: !canAct || !!busy, ...props },
     h(Codicon, { name: icon, size: '0.8rem' }), label)
   return h('main', { className: 'harp-page' },
@@ -293,7 +364,15 @@ function HarpPage() {
       h('span', null, accounts.data?.live_read_at ? `Live usage read ${new Date(accounts.data.live_read_at * 1000).toLocaleTimeString()}` : 'Live usage not read yet'),
       h('span', null, '· budgets are local monitoring')),
     h('div', { className: 'harp-body' }, view === 'diagram' ? h(Diagram) : h('div', null,
-      h(Accounts, { query: accounts }), h(Usage, { query: usage, tag, setTag }))),
+      h(Accounts, { query: accounts, canAct: canAct && !busy, onAction }), h(Usage, { query: usage, tag, setTag }))),
+    target?.type === 'relogin' && h(AddDialog, { provider, replace: target.row, onClose: closeTarget, onDone: () => { closeTarget(); accounts.refetch() } }),
+    target?.type === 'park' && h(ParkDialog, { row: target.row, busy, onClose: closeTarget,
+      onConfirm: until => run('Park', '/pool/park', { provider, id: target.row.id, until }, () => notify('success', `Parked ${target.row.label}.`)) }),
+    target?.type === 'schedule' && h(ScheduleDialog, { row: target.row, busy, onClose: closeTarget,
+      onSave: every => run('Schedule', '/pool/schedule', { provider, id: target.row.id, every }, result =>
+        notify(result.warning ? 'warning' : 'success', result.warning || (every ? `Schedule saved: ${every}` : 'Schedule removed.'))) }),
+    target?.type === 'remove' && h(RemoveDialog, { row: target.row, busy, onClose: closeTarget,
+      onConfirm: () => run('Remove', '/pool/remove', { provider, id: target.row.id }, result => notify('success', `Removed ${result.removed}.`)) }),
     dialog === 'balance' && h(BalanceDialog, { provider, busy, onClose: () => setDialog(null),
       onConfirm: () => run('Balance', '/pool/balance', { provider }, result => notify(result.changed ? 'success' : 'warning',
         result.changed ? `Balanced: ${result.order.join(' > ')}${result.benched.length ? ` · benched ${result.benched.join(', ')}` : ''}` : result.message)) }),

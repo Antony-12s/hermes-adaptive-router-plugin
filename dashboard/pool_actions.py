@@ -47,7 +47,7 @@ def plan_balance(rows, threshold=THRESHOLD):
 
     Returns None when no account has a reading, so nothing changes on a blind run.
     """
-    known = [r for r in rows if r.peak is not None and r.status != "dead"]
+    known = [r for r in rows if r.peak is not None and r.status not in ("dead", "parked")]
     if not known:
         return None
     full = [r for r in known if r.peak[0] >= threshold]
@@ -58,6 +58,8 @@ def plan_balance(rows, threshold=THRESHOLD):
     def rank(row):
         if row.status == "dead":
             return 1000
+        if row.status == "parked":
+            return 900
         if row.peak is None:
             return 500
         return row.peak[0] + (200 if row.id in full_ids else 0)
