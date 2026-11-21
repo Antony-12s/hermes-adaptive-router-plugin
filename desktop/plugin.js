@@ -1,11 +1,16 @@
-// HARP Desktop page. Read-only; shares the plugin's authenticated backend.
-import { Button, Codicon, host, PALETTE_AREA, ROUTES_AREA, SegmentedControl, SIDEBAR_NAV_AREA, useQuery } from '@hermes/plugin-sdk'
-import { createElement as h, useState } from 'react'
+// HARP Desktop page: accounts, live usage, balance, wake and sign-in through HARP's own backend.
+import { Button, Codicon, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, host, Input, PALETTE_AREA, ROUTES_AREA, SegmentedControl, SIDEBAR_NAV_AREA, useQuery } from '@hermes/plugin-sdk'
+import { createElement as h, useEffect, useState } from 'react'
 
 const ID = 'harp'
 const ROUTE = '/harp'
+const ACTION_PROVIDERS = ['anthropic', 'openai-codex']
 const number = new Intl.NumberFormat()
 let rest
+let openExternal
+const post = (path, body) => rest(path, { method: 'POST', body, timeoutMs: 180000 })
+const notify = (kind, message) => host.notify?.({ kind, message })
+const failure = error => error?.message || String(error)
 
 // Match the density, surfaces, and controls of the Accounts desktop page.
 const CSS = `
@@ -50,6 +55,12 @@ const CSS = `
 .harp-flow b{display:flex;align-items:center;justify-content:center;min-width:22px;height:22px;border-radius:6px;background:var(--ui-bg-quaternary);font-size:.6875rem;color:var(--ui-text-primary)}
 .harp-flow strong{font-size:.75rem;color:var(--ui-text-primary)}
 .harp-flow p{margin:2px 0 0;font-size:.6875rem;color:var(--ui-text-tertiary)}
+.harp-dialog p{margin:0 0 8px;font-size:.75rem;color:var(--ui-text-secondary);line-height:1.45}
+.harp-dialog code{font-size:1rem;font-weight:600;color:var(--ui-text-primary);letter-spacing:.08em}
+.harp-picks{display:flex;flex-direction:column;gap:6px;margin:6px 0}
+.harp-picks label{display:flex;align-items:center;gap:8px;font-size:.75rem}
+.harp-error{color:var(--ui-red);font-size:.75rem;margin-top:6px}
+.harp-link{word-break:break-all;font-size:.6875rem;color:var(--ui-text-tertiary)}
 `
 
 function Table({ label, headings, rows }) {
@@ -117,9 +128,10 @@ function Accounts({ query }) {
           })
         })),
       h(Section, { title: 'POOL ACCOUNTS' }, data.accounts.length
-        ? h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Recorded status'], rows: data.accounts.map((row, index) => ({
-            key: index, cells: [index + 1,
+        ? h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Live usage', 'Recorded status'], rows: data.accounts.map((row, index) => ({
+            key: row.id || index, cells: [index + 1,
               h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${row.status === 'ok' ? '' : ' off'}`, 'aria-hidden': true }), row.label),
+              row.usage ? h(Meter, { percent: row.usage.peak, label: `${row.label} live usage` }) : h('span', { className: 'harp-muted' }, 'Not read yet'),
               h('span', { className: 'harp-status' }, row.status)]
           })) })
         : h('div', { className: 'harp-empty' }, 'No accounts configured for this provider.')),
@@ -172,12 +184,96 @@ function Usage({ query, tag, setTag }) {
           : h('div', { className: 'harp-empty' }, 'No usage recorded for this UTC day.'))))
 }
 
+function ActionDialog({ title, onClose, footer, children }) {
+  return h(Dialog, { open: true, onOpenChange: open => !open && onClose() },
+    h(DialogContent, { className: 'harp-dialog', style: { maxWidth: 520 } },
+      h(DialogHeader, null, h(DialogTitle, null, title)),
+      children,
+      h(DialogFooter, null, h(Button, { size: 'sm', variant: 'ghost', onClick: onClose }, 'Cancel'), footer)))
+}
+
+function BalanceDialog({ provider, busy, onClose, onConfirm }) {
+  return h(ActionDialog, { title: 'Balance now?', onClose, footer:
+    h(Button, { size: 'sm', 'data-action': 'confirm-balance', disabled: !!busy, onClick: onConfirm }, busy ? 'Balancing…' : 'Balance now') },
+    h('p', null, `HARP reads the live usage of every ${provider} account, benches accounts at 90% or more until their window resets, releases accounts HARP benched that are now below 90%, and puts the least-used account first.`),
+    h('p', null, 'If no account can be read, nothing changes. If every account is at 90% or more, only accounts at 100% are benched. Running sessions keep their account.'))
+}
+
+function WakeDialog({ accounts, busy, onClose, onConfirm }) {
+  const [picked, setPicked] = useState([])
+  const usable = accounts.filter(row => row.id && row.status !== 'dead')
+  return h(ActionDialog, { title: 'Wake accounts', onClose, footer:
+    h(Button, { size: 'sm', 'data-action': 'confirm-wake', disabled: !!busy || !picked.length, onClick: () => onConfirm(picked) },
+      busy ? 'Waking…' : `Wake ${picked.length} account${picked.length === 1 ? '' : 's'}`) },
+    h('p', null, 'Wake sends one tiny request (claude-haiku-4-5, 1 output token) to each chosen account whose 5-hour window is not running, so the window starts now. HARP skips accounts that are running, unread, or woken in the last 10 minutes.'),
+    h('div', { className: 'harp-picks' }, ...usable.map(row => h('label', { key: row.id },
+      h('input', { type: 'checkbox', checked: picked.includes(row.id), 'aria-label': `Wake ${row.label}`,
+        onChange: event => setPicked(event.target.checked ? [...picked, row.id] : picked.filter(id => id !== row.id)) }),
+      row.label))),
+    !usable.length && h('p', null, 'No usable accounts.'))
+}
+
+function AddDialog({ provider, onClose, onDone }) {
+  const [label, setLabel] = useState('')
+  const [flow, setFlow] = useState(null)
+  const [code, setCode] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const finish = result => {
+    if (result.status === 'done') { notify('success', `Added ${result.account}.`); onDone() }
+    else if (result.status === 'error') { setError(result.message); if (result.final) setFlow(null) }
+  }
+  useEffect(() => {
+    if (flow?.kind !== 'device') return undefined
+    const timer = setInterval(() => post('/signin/step', { flow: flow.flow }).then(finish, e => setError(failure(e))), 3000)
+    return () => clearInterval(timer)
+  }, [flow?.flow])
+  const act = async (path, body, then) => {
+    setBusy(true); setError('')
+    try { then(await post(path, body)) } catch (e) { setError(failure(e)) } finally { setBusy(false) }
+  }
+  const cancel = () => { if (flow) post('/signin/cancel', { flow: flow.flow }).catch(() => {}); onClose() }
+  const footer = !flow
+    ? h(Button, { size: 'sm', 'data-action': 'start-signin', disabled: busy || !label.trim(),
+        onClick: () => act('/signin/start', { provider, label: label.trim() }, setFlow) }, busy ? 'Starting…' : 'Start sign-in')
+    : flow.kind === 'code'
+      ? h(Button, { size: 'sm', 'data-action': 'finish-signin', disabled: busy || !code.trim(),
+          onClick: () => act('/signin/step', { flow: flow.flow, code }, finish) }, busy ? 'Checking…' : 'Finish')
+      : null
+  return h(ActionDialog, { title: `Add ${provider} account`, onClose: cancel, footer },
+    !flow && h('div', null,
+      h('p', null, 'Hermes signs the account in and saves it in its pool. Use the account email as the name.'),
+      h(Input, { value: label, placeholder: 'name@example.com', 'aria-label': 'Account name', onChange: event => setLabel(event.target.value) })),
+    flow?.kind === 'code' && h('div', null,
+      h('p', null, '1. Open the link in a browser signed in as this account and authorize.'),
+      h(Button, { size: 'sm', variant: 'outline', onClick: () => openExternal ? openExternal(flow.url) : window.open(flow.url) }, 'Open sign-in link'),
+      h('div', { className: 'harp-link' }, flow.url),
+      h('p', null, '2. Paste the whole code shown after authorizing.'),
+      h(Input, { value: code, placeholder: 'code#state', 'aria-label': 'Authorization code', onChange: event => setCode(event.target.value) })),
+    flow?.kind === 'device' && h('div', null,
+      h('p', null, 'Open the page, enter this code, and authorize. This window finishes by itself.'),
+      h('code', null, flow.user_code),
+      h('div', null, h(Button, { size: 'sm', variant: 'outline', onClick: () => openExternal ? openExternal(flow.url) : window.open(flow.url) }, 'Open sign-in page'))),
+    error && h('div', { className: 'harp-error', role: 'alert' }, error))
+}
+
 function HarpPage() {
   const [provider, setProvider] = useState('anthropic')
   const [view, setView] = useState('usage')
   const [tag, setTag] = useState('')
+  const [dialog, setDialog] = useState(null)
+  const [busy, setBusy] = useState('')
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
   const usage = useQuery({ queryKey: [ID, 'usage'], queryFn: () => rest('/usage'), refetchInterval: 60000 })
+  const canAct = ACTION_PROVIDERS.includes(provider)
+  const run = async (name, path, body, report) => {
+    setBusy(name)
+    try { report(await post(path, body)); setDialog(null); accounts.refetch() }
+    catch (error) { notify('error', `${name} failed: ${failure(error)}`) }
+    finally { setBusy('') }
+  }
+  const tool = (label, icon, props) => h(Button, { size: 'sm', variant: 'ghost', disabled: !canAct || !!busy, ...props },
+    h(Codicon, { name: icon, size: '0.8rem' }), label)
   return h('main', { className: 'harp-page' },
     h('header', { className: 'harp-head' },
       h('h1', { className: 'harp-title' }, 'HARP'),
@@ -186,22 +282,35 @@ function HarpPage() {
         { id: 'anthropic', label: 'anthropic' }, { id: 'jev', label: 'jev' }, { id: 'openai-codex', label: 'openai-codex' }
       ], value: provider, onChange: setProvider }),
       h('span', { className: 'harp-grow' }),
-      h(Button, { size: 'sm', variant: 'ghost', disabled: accounts.isFetching || usage.isFetching,
-        onClick: () => { accounts.refetch(); usage.refetch() } }, h(Codicon, { name: 'refresh', size: '0.8rem' }), 'Refresh')),
+      h(Button, { size: 'sm', variant: 'ghost', 'aria-label': 'Refresh', disabled: accounts.isFetching || usage.isFetching,
+        onClick: () => { accounts.refetch(); usage.refetch() } }, h(Codicon, { name: 'eye', size: '0.8rem' })),
+      tool('Live usage', 'refresh', { onClick: () => run('Live usage', '/pool/live', { provider }, () => notify('success', 'Live usage updated.')) }),
+      tool('Wake', 'zap', { disabled: provider !== 'anthropic' || !!busy, onClick: () => setDialog('wake') }),
+      tool('Balance now', 'arrow-swap', { variant: 'outline', onClick: () => setDialog('balance') }),
+      tool('Add account', 'add', { variant: 'default', onClick: () => setDialog('add') })),
     h('div', { className: 'harp-sub' },
       h(SegmentedControl, { options: [{ id: 'usage', label: 'Accounts & usage' }, { id: 'diagram', label: 'Diagram' }], value: view, onChange: setView }),
-      h('span', null, 'Read-only · provider quota is not per-account · budgets are local monitoring')),
+      h('span', null, accounts.data?.live_read_at ? `Live usage read ${new Date(accounts.data.live_read_at * 1000).toLocaleTimeString()}` : 'Live usage not read yet'),
+      h('span', null, '· budgets are local monitoring')),
     h('div', { className: 'harp-body' }, view === 'diagram' ? h(Diagram) : h('div', null,
-      h(Accounts, { query: accounts }), h(Usage, { query: usage, tag, setTag }))))
+      h(Accounts, { query: accounts }), h(Usage, { query: usage, tag, setTag }))),
+    dialog === 'balance' && h(BalanceDialog, { provider, busy, onClose: () => setDialog(null),
+      onConfirm: () => run('Balance', '/pool/balance', { provider }, result => notify(result.changed ? 'success' : 'warning',
+        result.changed ? `Balanced: ${result.order.join(' > ')}${result.benched.length ? ` · benched ${result.benched.join(', ')}` : ''}` : result.message)) }),
+    dialog === 'wake' && h(WakeDialog, { accounts: accounts.data?.accounts || [], busy, onClose: () => setDialog(null),
+      onConfirm: ids => run('Wake', '/pool/wake', { provider, ids }, result => notify('info',
+        result.results.map(row => `${row.account}: ${row.result}`).join('\n') || 'Nothing to wake.')) }),
+    dialog === 'add' && h(AddDialog, { provider, onClose: () => setDialog(null), onDone: () => { setDialog(null); accounts.refetch() } }))
 }
 
 export default {
   id: ID,
   name: 'HARP',
-  description: 'Read-only accounts, quotas, usage and request flow for HARP.',
+  description: 'Accounts, live usage, balance, wake, sign-in and request flow for HARP.',
   defaultEnabled: false,
   register(ctx) {
     rest = ctx.rest
+    openExternal = ctx.os?.openExternal
     const style = document.createElement('style')
     style.dataset.plugin = ID
     style.textContent = CSS

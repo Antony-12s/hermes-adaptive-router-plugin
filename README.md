@@ -72,8 +72,13 @@ config holds aggregate counts and labels, with no credentials or chat text.
 
 The optional `desktop/plugin.js` adds a **HARP** sidebar page to Hermes Desktop.
 It reads the same authenticated `/accounts` and `/usage` endpoints as the web
-Dashboard and includes the request-flow diagram. It is read-only; local daily
-budgets are monitoring thresholds, not provider limits. The Agent and Desktop
+Dashboard and includes the request-flow diagram. Its toolbar has HARP-owned
+account actions for Anthropic and OpenAI Codex pools: **Live usage** (reads each
+credential's usage), **Wake** (Anthropic only; one 1-token request to idle
+accounts), **Balance now** (benches accounts at 90% or more and orders the pool by
+usage), and **Add account** (relays `hermes auth add`). Wake and Balance ask for
+confirmation. Local daily budgets are monitoring thresholds, not provider
+limits. The Agent and Desktop
 halves are enabled separately. After installing the package, rescan plugins in
 Desktop's Capabilities → Plugins and enable the Desktop half. The backend API
 may require a full Desktop quit and reopen to mount after a fresh install.

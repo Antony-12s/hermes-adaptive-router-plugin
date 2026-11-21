@@ -12,17 +12,21 @@ function fixture(usage) {
   const slots = ['anthropic', 'usage', '']
   let index = 0
   const results = [
-    { data: { accounts: [{ label: 'Personal', status: 'ok' }], windows: [{ label: '5h', used_percent: 25, reset_at: null }] }, refetch() {} },
+    { data: { accounts: [{ id: 'acc-1', label: 'Personal', status: 'ok', usage: { peak: 40, windows: [] } }], windows: [{ label: '5h', used_percent: 25, reset_at: null }] }, refetch() {} },
     { data: usage, refetch() {} }
   ]
+  const pass = type => ({ children, ...props }) => ({ type, props, children: children || [] })
   const sandbox = {
-    Intl, Date, Set, JSON, Math, Number, document: {
+    Intl, Date, Set, JSON, Math, Number, String, document: {
       head: { appendChild() {} }, createElement: () => ({ dataset: {}, remove() {} })
     },
-    host: { navigate: path => requests.push(path) },
+    host: { navigate: path => requests.push(path), notify: message => requests.push({ notify: message }) },
     PALETTE_AREA: 'palette', ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar',
     Button: ({ children, ...props }) => ({ type: 'button', props, children }),
     Codicon: () => null,
+    Dialog: pass('dialog'), DialogContent: pass('div'), DialogHeader: pass('header'), DialogFooter: pass('footer'), DialogTitle: pass('h2'),
+    Input: props => ({ type: 'input', props, children: [] }),
+    useEffect: () => {},
     SegmentedControl: ({ options, value, onChange }) => ({ type: 'div', props: { role: 'group' },
       children: options.map(option => ({ type: 'button', props: { onClick: () => onChange(option.id), 'aria-pressed': value === option.id }, children: [option.label] })) }),
     useQuery: options => { requests.push(options); return options.queryKey[1] === 'usage' ? results[1] : results[0] },
@@ -32,7 +36,7 @@ function fixture(usage) {
   }
   vm.runInNewContext(source, sandbox, { filename: 'desktop/plugin.js' })
   const registrations = []
-  sandbox.plugin.register({ rest: path => { requests.push(path); return Promise.resolve({}) }, onDispose() {}, registerMany: entries => registrations.push(...entries) })
+  sandbox.plugin.register({ rest: (path, options) => { requests.push(options ? { path, ...options } : path); return Promise.resolve({ changed: false, results: [], message: 'ok' }) }, os: {}, onDispose() {}, registerMany: entries => registrations.push(...entries) })
   function expand(node) {
     if (Array.isArray(node)) return node.map(expand)
     if (node == null || typeof node !== 'object') return node
@@ -54,6 +58,65 @@ function fixture(usage) {
   const text = tree => nodes(tree, n => typeof n.type === 'string').flatMap(n => n.children.filter(c => typeof c === 'string')).join(' ')
   return { registrations, requests, render, nodes, text, slots }
 }
+
+test('HARP toolbar exposes its own account actions without invoking account-pool', () => {
+  const app = fixture({ configured: false, usage: [] })
+  const page = app.render()
+  for (const label of ['Live usage', 'Wake', 'Balance now', 'Add account']) {
+    assert.equal(app.nodes(page, n => n.type === 'button' && n.children.includes(label)).length, 1, label)
+  }
+  assert.equal(app.requests.some(request => typeof request === 'string' && request.includes('account-pool')), false)
+})
+
+test('balance asks for confirmation before sending a write to HARP backend', async () => {
+  const app = fixture({ configured: false, usage: [] })
+  let page = app.render()
+  app.nodes(page, n => n.type === 'button' && n.children.includes('Balance now'))[0].props.onClick()
+  page = app.render()
+  assert.match(app.text(page), /90%/)
+  assert.equal(app.requests.some(request => request?.method === 'POST'), false)
+  const confirm = app.nodes(page, n => n.props?.['data-action'] === 'confirm-balance')[0]
+  assert.ok(confirm, 'confirmation button must exist')
+  await confirm.props.onClick()
+  assert.ok(app.requests.some(request => request?.path === '/pool/balance' && request.method === 'POST'))
+})
+
+const button = (app, page, label) => app.nodes(page, n => n.type === 'button' && n.children.includes(label))[0]
+
+test('live usage reads the pool through HARP backend', async () => {
+  const app = fixture({ configured: false, usage: [] })
+  await button(app, app.render(), 'Live usage').props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/pool/live').body)), { provider: 'anthropic' })
+  assert.equal(app.nodes(app.render(), n => n.props?.['aria-label'] === 'Personal live usage: 40% used').length, 1)
+})
+
+test('wake sends only the accounts picked after confirmation', async () => {
+  const app = fixture({ configured: false, usage: [] })
+  button(app, app.render(), 'Wake').props.onClick()
+  let page = app.render()
+  assert.equal(app.requests.some(r => r?.method === 'POST'), false)
+  app.nodes(page, n => n.type === 'input' && n.props.type === 'checkbox')[0].props.onChange({ target: { checked: true } })
+  page = app.render()
+  await app.nodes(page, n => n.props?.['data-action'] === 'confirm-wake')[0].props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/pool/wake').body)), { provider: 'anthropic', ids: ['acc-1'] })
+})
+
+test('add account starts Hermes sign-in with the entered name', async () => {
+  const app = fixture({ configured: false, usage: [] })
+  button(app, app.render(), 'Add account').props.onClick()
+  let page = app.render()
+  app.nodes(page, n => n.type === 'input' && n.props['aria-label'] === 'Account name')[0].props.onChange({ target: { value: 'me@example.com' } })
+  page = app.render()
+  await app.nodes(page, n => n.props?.['data-action'] === 'start-signin')[0].props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/signin/start').body)), { provider: 'anthropic', label: 'me@example.com' })
+})
+
+test('account actions are disabled for providers HARP cannot manage', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.slots[0] = 'jev'
+  const page = app.render()
+  for (const label of ['Live usage', 'Wake', 'Balance now', 'Add account']) assert.equal(button(app, page, label).props.disabled, true, label)
+})
 
 test('registers one Desktop page, sidebar entry and palette navigation', () => {
   const app = fixture({ configured: false, usage: [] })
