@@ -31,8 +31,9 @@ class RoutingTests(unittest.TestCase):
             path.write_text(json.dumps(self.config), encoding="utf-8")
             with patch.dict(os.environ, HARP_CONFIG=str(path)):
                 harp.register(ctx)
-        ctx.register_middleware.assert_called_once()
-        kind, callback = ctx.register_middleware.call_args.args
+        policy_calls = [c.args for c in ctx.register_middleware.call_args_list if c.args[1] is not harp.apply_turn_route]
+        self.assertEqual(len(policy_calls), 1)
+        kind, callback = policy_calls[0]
         self.assertEqual(kind, "llm_request")
         result = callback(**self.payload, middleware_schema_version="hermes.middleware.v1")
         self.assertEqual(result["request"], {**self.request, "model": "fast"})
@@ -42,7 +43,7 @@ class RoutingTests(unittest.TestCase):
         ctx = Mock()
         with patch.dict(os.environ, HARP_CONFIG=""):
             harp.register(ctx)
-        ctx.register_middleware.assert_not_called()
+        self.assertEqual([c.args for c in ctx.register_middleware.call_args_list], [("llm_request", harp.apply_turn_route)])
 
     def test_other_provider_model_or_api_mode_passes_through(self):
         policy = harp.RoutingPolicy(**self.config)

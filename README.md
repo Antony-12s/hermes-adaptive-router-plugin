@@ -94,3 +94,13 @@ and tagged usage collection remain inactive.
 ```powershell
 python -B -m unittest discover -s tests -v
 ```
+
+## Router
+
+The Diagram tab routes each new message to a provider, model and effort.
+If a working Type-safe (Jev) API key is in the pool, Jev decides what the
+local learner is not sure about and teaches it; without a key the local
+learner decides on its own for free. Set each account's plan (x1, x5, x20)
+so work moves away from a provider near its limit. It starts in Shadow mode,
+which only records picks; Apply changes model and effort on the session's own
+provider. Mark picks Right or Wrong to teach it.

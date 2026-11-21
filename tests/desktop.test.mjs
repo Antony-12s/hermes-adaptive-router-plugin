@@ -238,10 +238,11 @@ test('top row picks Diagram or a provider; the second row holds the five views',
   const groups = JSON.parse(JSON.stringify(app.nodes(page, n => n.props?.role === 'group').map(g => g.children.map(b => b.children[0]))))
   assert.deepEqual(groups[0], ['Diagram', 'Type-safe', 'anthropic', 'Codex'])
   assert.deepEqual(groups[1], ['Accounts & usage', 'Activity', 'Report', 'Health', 'Alerts'])
+  app.results.router = { data: routerData(), refetch() {} }
   tab(app, 'Diagram').props.onClick()
   const diagram = app.render()
-  assert.match(app.text(diagram), /REQUEST FLOW/)
-  assert.equal(app.nodes(diagram, n => n.props?.role === 'group').length, 1)
+  assert.match(app.text(diagram), /ROUTING TO PROVIDER/)
+  assert.equal(app.nodes(diagram, n => n.props?.role === 'group' && app.text(n).includes('Activity')).length, 0)
   assert.equal(app.nodes(diagram, n => n.type === 'button' && n.children.includes('Add account')).length, 0)
   tab(app, 'Codex').props.onClick()
   app.render()
@@ -273,4 +274,68 @@ test('activity, report, health and alerts render their own data', async () => {
   assert.match(app.text(page), /Personal 5-hour window at 95%/)
   await app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Desktop notifications')[0].props.onCheckedChange(true)
   assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/alerts').body)), { desktop: true })
+})
+
+
+function routerData(over = {}) {
+  return {
+    settings: { enabled: true, apply: false, mode: 'balanced', limit: 85, jev_model: 'jev-latest', jev_daily_cap: 300, plans: { anthropic: { a1: 'x5' } },
+      candidates: [{ provider: 'openai-codex', model: 'gpt-6-sol', description: 'code and bugs', cap: 'high' },
+        { provider: 'anthropic', model: 'claude-sonnet-5', description: 'general', cap: 'medium' }] },
+    jev: { state: 'ok', label: 'Tony', ms: 310 },
+    loads: { anthropic: { used: 40, left: 3, capacity: 6 }, 'openai-codex': { used: 91, left: 0.1, capacity: 1 } },
+    stats: { decisions: 12, local: 9, jev: 3, samples: 15, corrections_total: 1, rated: 4, right: 3, corrections: [{ from: 'openai-codex:gpt-6-sol', to: 'anthropic:claude-sonnet-5', times: 1 }] },
+    recent: [{ id: 7, ts: 1, platform: 'desktop', text: 'why does the app crash', pick: 'openai-codex:gpt-6-sol', effort: 'medium', by: 'jev', confidence: 0.9, moved_from: null, current: 'claude-opus-5-5', applied: 0, feedback: null }],
+    jev_calls_today: 3, samples: 15,
+    accounts: { anthropic: [{ id: 'a1', label: 'Personal', peak: 40 }], 'openai-codex': [{ id: 'c1', label: 'Main', peak: 91 }] },
+    models: { anthropic: ['claude-opus-5-5', 'claude-sonnet-5'], 'openai-codex': ['gpt-6-sol', 'gpt-6-mini'] },
+    ...over
+  }
+}
+
+function routerPage(data = routerData()) {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.router = { data, refetch() {} }
+  app.slots[0] = 'diagram'
+  return app
+}
+
+test('diagram shows the router: key state, flow, candidates, load and learning', () => {
+  const app = routerPage()
+  const text = app.text(app.render())
+  for (const part of [/Jev API found/, /Tony/, /ROUTING TO PROVIDER/, /gpt-6-sol/, /Shadow/, /91%/, /near its limit/, /why does the app crash/, /9 of 12/])
+    assert.match(text, part)
+})
+
+test('no Jev key: the local learner decides and the page offers to add one', () => {
+  const app = routerPage(routerData({ jev: { state: 'none' } }))
+  const page = app.render()
+  assert.match(app.text(page), /No Jev API key/)
+  assert.ok(button(app, page, 'Add Jev API key'))
+})
+
+test('router edits are saved together', async () => {
+  const app = routerPage()
+  let page = app.render()
+  button(app, page, 'Best').props.onClick()
+  page = app.render()
+  app.nodes(page, n => n.type === 'select' && n.props['aria-label'] === 'Plan: Personal')[0].props.onChange({ target: { value: 'x20' } })
+  page = app.render()
+  await app.nodes(page, n => n.props?.['data-action'] === 'save-router')[0].props.onClick()
+  const body = JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/router/settings').body))
+  assert.equal(body.mode, 'best')
+  assert.equal(body.plans.anthropic.a1, 'x20')
+  assert.equal(body.candidates.length, 2)
+})
+
+test('feedback and try-it reach the backend', async () => {
+  const app = routerPage()
+  let page = app.render()
+  await app.nodes(page, n => n.type === 'button' && n.props['aria-label'] === 'Right pick: why does the app crash')[0].props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/router/feedback').body)), { id: 7, label: '' })
+  page = app.render()
+  app.nodes(page, n => n.type === 'input' && n.props['aria-label'] === 'Try a message')[0].props.onChange({ target: { value: 'fix my build' } })
+  page = app.render()
+  await button(app, page, 'Ask Jev').props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/router/try').body)), { text: 'fix my build', use_jev: true })
 })

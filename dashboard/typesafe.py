@@ -39,3 +39,25 @@ def check(key, base_url=BASE_URL, opener=urllib.request.urlopen):
 def key_accepted(result):
     """True when TypeSafe recognised the key, even if it is busy or rate-limited right now."""
     return result.get("ok") or result.get("status") in (429, 529)
+
+
+def key_state(result):
+    """ok / bad (key rejected) / down (TypeSafe unreachable, busy, out of credit)."""
+    if result.get("ok"):
+        return "ok"
+    return "bad" if result.get("status") in (401, 403) else "down"
+
+
+def system_one(key, state, questions, model="jev-latest", base_url=BASE_URL, timeout=4,
+               opener=urllib.request.urlopen):
+    """POST /v1/systemone. Returns (answers dict, milliseconds); raises on any failure."""
+    body = json.dumps({"model": model, "state": state, "questions": questions}).encode()
+    request = urllib.request.Request(base_url.rstrip("/") + "/systemone", data=body, method="POST",
+                                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                                              "Accept": "application/json", "User-Agent": "hermes-harp"})
+    started = time.monotonic()
+    with opener(request, timeout=timeout) as response:
+        answers = json.loads(response.read() or b"{}").get("answers")
+    if not isinstance(answers, dict):
+        raise ValueError("TypeSafe returned no answers")
+    return answers, round((time.monotonic() - started) * 1000)

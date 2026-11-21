@@ -84,6 +84,30 @@ const CSS = `
 .harp-setting b{display:block;font-size:.75rem;font-weight:500;color:var(--ui-text-primary)}
 .harp-setting span{font-size:.6875rem;color:var(--ui-text-tertiary)}
 .harp-setting input{width:64px}
+.harp-key{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--ui-stroke-tertiary);border-radius:8px;margin:6px 0 4px}
+.harp-key.ok{border-color:color-mix(in srgb,var(--ui-green, #3fb950) 60%,transparent)}
+.harp-key.warn{border-color:color-mix(in srgb,var(--ui-orange) 60%,transparent)}
+.harp-key b{display:block;font-size:.8125rem;font-weight:600;color:var(--ui-text-primary)}
+.harp-key span{font-size:.6875rem;color:var(--ui-text-tertiary)}
+.harp-tree{position:relative;margin:8px 0 4px}
+.harp-tree svg{position:absolute;inset:0;overflow:visible;pointer-events:none}
+.harp-tree path{fill:none;stroke:var(--ui-stroke-secondary);stroke-width:1.5}
+.harp-tree path.on{stroke:var(--ui-accent);stroke-width:2.4}
+.harp-node{position:absolute;height:34px;display:flex;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--ui-stroke-tertiary);border-radius:8px;background:var(--ui-bg-secondary);font-size:.75rem;white-space:nowrap;overflow:hidden}
+.harp-node.on{border-color:var(--ui-accent);box-shadow:0 0 0 1px var(--ui-accent)}
+.harp-node.dim{opacity:.55}
+.harp-node.round{border-radius:17px;font-weight:600}
+.harp-node small{margin-left:auto;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums}
+.harp-cand{display:grid;grid-template-columns:22px 130px minmax(140px,1fr) minmax(160px,2fr) 92px auto;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
+.harp-cand input,.harp-cand select,.harp-load select,.harp-tools select{font-size:.75rem}
+.harp-load{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-top:4px}
+.harp-load>div{border:1px solid var(--ui-stroke-tertiary);border-radius:8px;padding:8px 10px}
+.harp-load>div.hot{border-color:var(--ui-red)}
+.harp-load .acc{display:grid;grid-template-columns:1fr 64px 96px 36px;gap:6px;align-items:center;font-size:.6875rem;margin-top:5px}
+.harp-pick{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:.75rem;margin-top:6px}
+.harp-pick i{font-style:normal;padding:2px 8px;border-radius:10px;border:1px solid var(--ui-stroke-tertiary)}
+.harp-pick i.hit{border-color:var(--ui-accent);background:color-mix(in srgb,var(--ui-accent) 15%,transparent)}
+.harp-pick s{opacity:.6}
 `
 
 function Table({ label, headings, rows }) {
@@ -121,16 +145,137 @@ function SummaryCard({ title, value, detail, percent }) {
     h('div', { className: 'harp-card-s' }, detail))
 }
 
-function Diagram() {
-  const steps = [
-    ['Hermes prepares the request', 'Selects provider, model and credentials.'],
-    ['HARP checks routing rules', 'Eligible short text requests can use a faster model on the same provider.'],
-    ['Hermes sends the request', 'Hermes handles retries and configured fallback routes.'],
-    ['HARP records tagged usage', 'Successful main requests contribute reported token counts; unknown accounts stay Unassigned.']
-  ]
-  return h(Section, { title: 'REQUEST FLOW' }, h('ol', { className: 'harp-flow' },
-    ...steps.map(([title, detail], index) => h('li', { key: title }, h('b', null, index + 1),
-      h('div', null, h('strong', null, title), h('p', null, detail))))))
+const ROUTER_LABEL = { anthropic: 'anthropic', 'openai-codex': 'Codex' }
+const KEY_TEXT = {
+  ok: ['ok', 'Jev API found', 'Jev decides what the local learner is not sure about, and teaches it.'],
+  none: ['warn', 'No Jev API key: the local learner decides (free)', 'It learns from your corrections. Add a Type-safe key to make it sharper and learn faster.'],
+  bad: ['warn', 'The Jev API key was rejected: the local learner took over', 'TypeSafe answered 401/403. Nothing breaks; replace the key in Type-safe.'],
+  down: ['warn', 'Jev is not answering or out of credit: the local learner took over for now', 'HARP checks Jev again every 5 minutes and switches back by itself.']
+}
+const candId = c => `${c.provider}:${c.model}`
+const shortId = id => (id || '').split(':').slice(1).join(':')
+
+function RouterTree({ settings, decision, by }) {
+  const cands = settings.candidates
+  const ROW = 42, W = { text: 80, judge: 150, route: 170, cand: 230 }, X = { text: 0, judge: 104, route: 282, cand: 482 }
+  const height = Math.max(1, cands.length) * ROW
+  const mid = height / 2 - 17
+  const pick = decision?.pick
+  const path = (x1, y1, x2, y2, on) => { const mx = (x1 + x2) / 2; return h('path', { key: `${x2}-${y2}`, className: on ? 'on' : '', d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }) }
+  const node = (key, x, y, w, cls, ...children) => h('div', { key, className: `harp-node ${cls}`, style: { left: `${x}px`, top: `${y}px`, width: `${w}px` } }, ...children)
+  return h('div', { className: 'harp-tree', style: { height: `${height}px`, minWidth: `${X.cand + W.cand}px` } },
+    h('svg', { width: X.cand + W.cand, height },
+      path(X.text + W.text, mid + 17, X.judge, mid + 17, !!decision), path(X.judge + W.judge, mid + 17, X.route, mid + 17, !!decision),
+      ...cands.map((c, i) => path(X.route + W.route, mid + 17, X.cand, i * ROW + 21, candId(c) === pick))),
+    node('t', X.text, mid, W.text, 'round on', 'Text'),
+    node('j', X.judge, mid, W.judge, `round ${decision ? 'on' : ''}`, by === 'jev' ? 'Jev decides' : 'Local learner'),
+    node('r', X.route, mid, W.route, decision ? 'on' : '', 'ROUTING TO PROVIDER'),
+    ...cands.map((c, i) => node(candId(c), X.cand, i * ROW + 4, W.cand, pick ? (candId(c) === pick ? 'on' : 'dim') : '',
+      h('span', null, `${ROUTER_LABEL[c.provider] || c.provider} · ${c.model}`),
+      decision?.probs?.[candId(c)] != null && h('small', null, `${Math.round(decision.probs[candId(c)] * 100)}%`))))
+}
+
+function RouterView({ onAddKey }) {
+  const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
+  const [draft, setDraft] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [sample, setSample] = useState('')
+  const [tried, setTried] = useState(null)
+  const [fixing, setFixing] = useState(null)
+  const data = query.data
+  if (!data) return h(QueryState, { query, label: 'router' })
+  const s = draft || data.settings
+  const edit = changes => setDraft({ ...s, ...changes })
+  const setCand = (i, changes) => edit({ candidates: s.candidates.map((c, j) => (j === i ? { ...c, ...changes } : c)) })
+  const move = (i, d) => { const list = [...s.candidates]; [list[i], list[i + d]] = [list[i + d], list[i]]; edit({ candidates: list }) }
+  const act = async (name, fn) => { setBusy(name); try { await fn() } catch (e) { notify('error', `${name}: ${failure(e)}`) } finally { setBusy('') } }
+  const save = () => act('Save', async () => { await post('/router/settings', s); setDraft(null); notify('success', 'Router saved.'); query.refetch() })
+  const tryIt = useJev => act(useJev ? 'Ask Jev' : 'Try', async () => setTried((await post('/router/try', { text: sample, use_jev: useJev })).decision))
+  const vote = (row, label) => act('Feedback', async () => { await post('/router/feedback', { id: row.id, label }); setFixing(null); notify('success', 'Learned.'); query.refetch() })
+  const [cls, title, detail] = KEY_TEXT[data.jev.state] || KEY_TEXT.down
+  const shown = tried || (data.recent[0] ? { pick: data.recent[0].pick, probs: null } : null)
+  const st = data.stats
+  return h('div', null,
+    h('div', { className: 'harp-tools' },
+      h(Switch, { checked: s.enabled, 'aria-label': 'Router on', onCheckedChange: value => edit({ enabled: value }) }), 'Router',
+      h(SegmentedControl, { options: [{ id: 'shadow', label: 'Shadow: record only' }, { id: 'apply', label: 'Apply on the same provider' }],
+        value: s.apply ? 'apply' : 'shadow', onChange: value => edit({ apply: value === 'apply' }) }),
+      h('span', { className: 'harp-grow' }),
+      draft && h('span', null, 'Unsaved changes'),
+      h(Button, { size: 'sm', variant: 'default', 'data-action': 'save-router', disabled: !draft || !!busy, onClick: save }, busy === 'Save' ? 'Saving…' : 'Save')),
+    h('div', { className: `harp-key ${cls}` }, h(Codicon, { name: data.jev.state === 'ok' ? 'pass' : 'info', size: '1rem' }),
+      h('div', { className: 'harp-grow' }, h('b', null, data.jev.state === 'ok' ? `${title} · ${data.jev.label} · ${data.jev.ms ?? '–'} ms` : title), h('span', null, detail)),
+      data.jev.state === 'none'
+        ? h(Button, { size: 'sm', variant: 'outline', onClick: onAddKey }, 'Add Jev API key')
+        : h(Button, { size: 'sm', variant: 'ghost', disabled: !!busy, onClick: () => act('Check', async () => { await post('/router/check-key', {}); query.refetch() }) }, 'Check now')),
+    h(Section, { title: 'HOW A MESSAGE IS ROUTED' }, h('div', { style: { overflowX: 'auto' } },
+      h(RouterTree, { settings: s, decision: shown, by: tried?.by || data.recent[0]?.by || (data.jev.state === 'ok' ? 'jev' : 'local') }))),
+    h(Section, { title: 'MODELS IT CAN PICK' },
+      h('div', { className: 'harp-tools' }, 'Strongest first: when unsure it uses the top one. The description tells Jev and the learner what each is for.'),
+      ...s.candidates.map((c, i) => h('div', { className: 'harp-cand', key: candId(c) + i },
+        h('span', { className: 'harp-muted' }, i + 1),
+        h('select', { className: 'harp-select', value: c.provider, 'aria-label': `Provider ${i + 1}`,
+          onChange: e => setCand(i, { provider: e.target.value, model: (data.models[e.target.value] || [''])[0] }) },
+          ...Object.keys(ROUTER_LABEL).map(p => h('option', { key: p, value: p }, ROUTER_LABEL[p]))),
+        h('select', { className: 'harp-select', value: c.model, 'aria-label': `Model ${i + 1}`, onChange: e => setCand(i, { model: e.target.value }) },
+          ...[...new Set([c.model, ...(data.models[c.provider] || [])])].map(m => h('option', { key: m, value: m }, m))),
+        h(Input, { value: c.description || '', placeholder: 'What it is good at', 'aria-label': `Good at ${i + 1}`, onChange: e => setCand(i, { description: e.target.value }) }),
+        h('select', { className: 'harp-select', value: c.cap || 'high', 'aria-label': `Effort ceiling ${i + 1}`, onChange: e => setCand(i, { cap: e.target.value }) },
+          ...['low', 'medium', 'high'].map(v => h('option', { key: v, value: v }, `max ${v}`))),
+        h('span', { className: 'harp-row-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Move up ${i + 1}`, disabled: !i, onClick: () => move(i, -1) }, h(Codicon, { name: 'arrow-up', size: '0.8rem' })),
+          h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Remove ${i + 1}`, onClick: () => edit({ candidates: s.candidates.filter((_, j) => j !== i) }) }, h(Codicon, { name: 'trash', size: '0.8rem' }))))),
+      h('div', { className: 'harp-tools' }, h(Button, { size: 'sm', variant: 'outline', onClick: () => edit({ candidates: [...s.candidates, { provider: 'anthropic', model: (data.models.anthropic || [''])[0], description: '', cap: 'medium' }] }) },
+        h(Codicon, { name: 'add', size: '0.8rem' }), 'Add model'))),
+    h(Section, { title: 'FOCUS' }, h(SegmentedControl, { options: [{ id: 'save', label: 'Save' }, { id: 'balanced', label: 'Balanced' }, { id: 'best', label: 'Best' }],
+      value: s.mode, onChange: value => edit({ mode: value }) }),
+      h('span', { className: 'harp-muted' }, { save: ' Small models first, light thinking.', balanced: ' Pick by the task, medium thinking at most.', best: ' Strongest when unsure, full thinking.' }[s.mode])),
+    h(Section, { title: 'PROVIDER LOAD' },
+      h('div', { className: 'harp-tools' }, 'Set each account\'s plan once. Work moves away from a provider above ',
+        h('select', { className: 'harp-select', value: s.limit, 'aria-label': 'Load limit', onChange: e => edit({ limit: Number(e.target.value) }) },
+          ...[70, 80, 85, 90, 95].map(v => h('option', { key: v, value: v }, `${v}%`)))),
+      h('div', { className: 'harp-load' }, ...Object.keys(ROUTER_LABEL).map(provider => {
+        const load = data.loads[provider]
+        const hot = load && load.used >= s.limit
+        return h('div', { key: provider, className: hot ? 'hot' : '' },
+          h('div', { className: 'harp-account' }, h('b', null, ROUTER_LABEL[provider]), h('span', { className: 'harp-grow' }),
+            h('span', { className: 'harp-muted' }, !load ? 'no usage read yet' : hot ? `${load.used}% used: near its limit` : `${load.used}% used`)),
+          ...(data.accounts[provider] || []).map(a => h('div', { className: 'acc', key: a.id }, h('span', null, a.label),
+            h('select', { className: 'harp-select', value: (s.plans[provider] || {})[a.id] || 'x1', 'aria-label': `Plan: ${a.label}`,
+              onChange: e => edit({ plans: { ...s.plans, [provider]: { ...(s.plans[provider] || {}), [a.id]: e.target.value } } }) },
+              ...['x1', 'x5', 'x20'].map(v => h('option', { key: v, value: v }, v))),
+            h(Meter, { percent: a.peak, label: `${a.label} usage` }), h('span', { className: 'harp-num' }, a.peak == null ? '–' : `${Math.round(a.peak)}%`))))
+      }))),
+    h(Section, { title: 'TRY A MESSAGE' },
+      h('div', { className: 'harp-tools' },
+        h(Input, { value: sample, placeholder: 'Type anything…', 'aria-label': 'Try a message', onChange: e => setSample(e.target.value) }),
+        h(Button, { size: 'sm', variant: 'outline', disabled: !sample.trim() || !!busy, onClick: () => tryIt(false) }, 'Try'),
+        h(Button, { size: 'sm', variant: 'ghost', disabled: !sample.trim() || !!busy || data.jev.state !== 'ok', title: 'Spends one Jev call', onClick: () => tryIt(true) }, 'Ask Jev')),
+      tried && h('div', { className: 'harp-pick' },
+        h('span', null, tried.by === 'jev' ? 'Jev' : 'Local learner'),
+        tried.moved_from && h('s', null, shortId(tried.moved_from)),
+        h('i', { className: 'hit' }, `${ROUTER_LABEL[tried.pick.split(':')[0]]} · ${shortId(tried.pick)} · ${tried.effort}`),
+        h('span', { className: 'harp-muted' }, tried.unsure ? `not sure (${Math.round(tried.confidence * 100)}%): strongest model` : `sure ${Math.round(tried.confidence * 100)}%`),
+        tried.moved_from && h('span', { className: 'harp-muted' }, 'moved: the first pick\'s provider is near its limit'))),
+    h(Section, { title: 'WHAT IT LEARNED' },
+      h('div', { className: 'harp-cards' },
+        h(SummaryCard, { title: 'Learned from', value: `${data.samples}`, detail: `messages · ${st.corrections_total} of them your corrections` }),
+        h(SummaryCard, { title: 'Decided locally, 7 days', value: st.decisions ? `${Math.round(st.local / st.decisions * 100)}%` : '–', detail: `${st.local} of ${st.decisions} · free` }),
+        h(SummaryCard, { title: 'Jev calls today', value: `${data.jev_calls_today}`, detail: `daily cap ${s.jev_daily_cap}` }),
+        h(SummaryCard, { title: 'Right when rated', value: st.rated ? `${Math.round(st.right / st.rated * 100)}%` : '–', detail: `${st.rated} rated` })),
+      st.corrections.length ? h('div', { className: 'harp-tools' }, 'Corrections: ', st.corrections.map(c => `${shortId(c.from)} → ${shortId(c.to)} ×${c.times}`).join(' · ')) : null,
+      data.recent.length
+        ? h(Table, { label: 'Recent picks', headings: ['Message', 'Picked', 'By', 'Was on', ''], rows: data.recent.map(row => ({ key: row.id, cells: [
+            h('span', { className: 'harp-status' }, row.text),
+            `${shortId(row.pick)} · ${row.effort}`, row.by === 'jev' ? 'Jev' : 'local', row.current || '–',
+            row.feedback ? h('span', { className: 'harp-muted' }, row.feedback === 'ok' ? 'right' : `should be ${shortId(row.feedback)}`)
+              : fixing === row.id
+                ? h('select', { className: 'harp-select', 'aria-label': `Correct pick: ${row.text}`, value: '', onChange: e => vote(row, e.target.value) },
+                    h('option', { value: '' }, 'Should be…'), ...s.candidates.filter(c => candId(c) !== row.pick).map(c => h('option', { key: candId(c), value: candId(c) }, shortId(candId(c)))))
+                : h('span', { className: 'harp-row-actions' },
+                    h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Right pick: ${row.text}`, onClick: () => vote(row, '') }, h(Codicon, { name: 'thumbsup', size: '0.8rem' })),
+                    h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Wrong pick: ${row.text}`, onClick: () => setFixing(row.id) }, 'Wrong'))] })) })
+        : h('div', { className: 'harp-empty' }, 'No messages routed yet. Shadow mode records a pick for each new message.')))
 }
 
 function RowActions({ row, canAct, onAction }) {
@@ -594,7 +739,7 @@ function HarpPage() {
       h(SegmentedControl, { options: [{ id: 'usage', label: 'Accounts & usage' }, { id: 'activity', label: 'Activity' },
         { id: 'report', label: 'Report' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }], value: view, onChange: setView }),
       view === 'usage' && h('span', null, accounts.data?.live_read_at ? `Live usage read ${new Date(accounts.data.live_read_at * 1000).toLocaleTimeString()}` : 'Live usage not read yet')),
-    h('div', { className: 'harp-body' }, diagram ? h(Diagram)
+    h('div', { className: 'harp-body' }, diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
       : view === 'activity' ? h(ActivityView, { provider })
         : view === 'report' ? h(ReportView, { provider })
           : view === 'health' ? h(HealthView, { provider })

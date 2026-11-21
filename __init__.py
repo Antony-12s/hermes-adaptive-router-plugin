@@ -118,6 +118,75 @@ def track_account(session_id=None, provider=None, platform=None, usage=None, mod
         pass
 
 
+_ENGINE = None
+_TURN_ROUTES = {}          # session id -> decision to apply for this turn (apply mode only)
+
+
+def _engine():
+    global _ENGINE
+    if _ENGINE is None:
+        def jev_entries():
+            from agent.credential_pool import load_pool
+            return load_pool("jev").entries()
+
+        _ENGINE = _sibling("router_engine").Engine(_hermes_home(), jev_entries)
+    return _ENGINE
+
+
+def route_turn(session_id=None, user_message=None, platform=None, model=None, **_metadata):
+    """pre_llm_call: decide provider/model/effort for this message.
+
+    Shadow mode (default) decides on a background thread and only records it. Apply mode decides
+    now and keeps the pick for this turn when it stays on the session's own provider."""
+    try:
+        engine = _engine()
+        settings = engine.settings()
+        if not settings["enabled"] or not settings["candidates"]:
+            return None
+        text = _sibling("router").message_text(user_message)
+        session = str(session_id or "")
+        _TURN_ROUTES.pop(session, None)
+        if not settings["apply"]:
+            import threading
+            threading.Thread(target=_quiet, args=(engine.decide, text, session, platform or "", model or ""),
+                             daemon=True, name="harp-route").start()
+            return None
+        decision = engine.decide(text, session, platform or "", model or "")
+        agent = _find_agent(session)
+        provider = getattr(agent, "provider", "") or ""
+        if decision and agent is not None and decision["pick"].split(":", 1)[0] == provider:
+            _TURN_ROUTES[session] = decision
+    except Exception:  # noqa: BLE001 - routing must never break a turn
+        pass
+    return None
+
+
+def _quiet(function, *args):
+    try:
+        function(*args)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _thinking(model, effort, max_tokens):
+    from agent.anthropic_adapter import _thinking_kwargs
+    return _thinking_kwargs({"enabled": True, "effort": effort}, model, max_tokens)
+
+
+def apply_turn_route(request=None, session_id=None, provider=None, api_mode=None, **_context):
+    """llm_request middleware: use this turn's pick (same provider only). Any doubt: change nothing."""
+    try:
+        decision = _TURN_ROUTES.get(str(session_id or ""))
+        if not decision or decision["pick"].split(":", 1)[0] != provider:
+            return None
+        model = decision["pick"].split(":", 1)[1]
+        routed = _sibling("router").apply_route(request, api_mode, model, decision["effort"], _thinking)
+        return {"request": routed, "source": "harp-router",
+                "reason": f"{decision['by']} picked {model} ({decision['effort']})"} if routed else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def read_usage(provider, entry):
     """Read one pool credential's own usage windows, read-only (no credential repair)."""
     from agent.account_usage import fetch_account_usage
@@ -148,6 +217,9 @@ def _setup_cli(parser):
 
 def register(ctx):
     ctx.register_hook("post_api_request", track_account)
+    ctx.register_hook("pre_llm_call", route_turn)
+    if hasattr(ctx, "register_middleware"):
+        ctx.register_middleware("llm_request", apply_turn_route)
     if hasattr(ctx, "register_cli_command"):
         ctx.register_cli_command(name="harp", help="HARP account timer: hermes harp tick",
                                  setup_fn=_setup_cli)

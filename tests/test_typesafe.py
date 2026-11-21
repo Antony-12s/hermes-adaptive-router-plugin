@@ -49,3 +49,19 @@ class CheckTests(unittest.TestCase):
         self.assertEqual((result["ok"], result["problem"]), (False, "rate-limited"))
         self.assertTrue(typesafe.key_accepted(result))
         self.assertFalse(typesafe.key_accepted({"ok": False, "status": 401}))
+        self.assertEqual([typesafe.key_state(r) for r in ({"ok": True}, {"status": 401}, result, {"status": None})],
+                         ["ok", "bad", "down", "down"])
+
+    def test_system_one_posts_state_and_questions(self):
+        seen = {}
+
+        def opener(request, timeout):
+            seen.update(url=request.full_url, body=json.loads(request.data), auth=request.get_header("Authorization"), timeout=timeout)
+            return Response(json.dumps({"answers": {"route": {"choice": "a"}}}).encode())
+
+        answers, ms = typesafe.system_one("k", "hello", {"route": {"type": "choice"}}, opener=opener)
+        self.assertEqual(answers, {"route": {"choice": "a"}})
+        self.assertEqual(seen, {"url": "https://api.typesafe.ai/v1/systemone", "auth": "Bearer k", "timeout": 4,
+                                "body": {"model": "jev-latest", "state": "hello", "questions": {"route": {"type": "choice"}}}})
+        with self.assertRaises(ValueError):
+            typesafe.system_one("k", "x", {}, opener=lambda r, timeout: Response(b"{}"))

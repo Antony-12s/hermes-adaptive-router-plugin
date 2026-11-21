@@ -36,6 +36,7 @@ relay_mod = _sibling("signin_relay")
 pool_state = _sibling("pool_state")
 timer = _sibling("harp_timer")
 typesafe = _sibling("typesafe")
+router_engine = _sibling("router_engine")
 
 POOL_LOCK = threading.Lock()
 LIVE = {}            # provider -> {"read_at": epoch, "accounts": {entry id: reading}}
@@ -124,6 +125,11 @@ def _read_all(provider, pool):
         snapshots[entry.id] = _read_usage(provider, entry)
         readings[entry.id] = _reading(snapshots[entry.id])
     LIVE[provider] = {"read_at": time.time(), "accounts": readings}
+    if provider not in contract.KEY_PROVIDERS:
+        try:   # the router's load view: weighted by each account's plan
+            _engine().record_load(provider, {i: r["peak"] for i, r in readings.items() if r.get("peak") is not None})
+        except Exception:  # noqa: BLE001 - load is advisory
+            pass
     return snapshots
 
 
@@ -531,6 +537,75 @@ def pool_add_key(body: dict):
         "peak": None, "windows": [], "check": result}
     _log(provider, "relogin" if old else "add", f"{'Replaced the key of' if old else 'Added key'} {label}")
     return {"account": label, "models": result["models"], "replaced": bool(old)}
+
+
+_ENGINE = []
+ROUTER_PROVIDERS = ("anthropic", "openai-codex")
+
+
+def _engine():
+    if not _ENGINE:
+        _ENGINE.append(router_engine.Engine(_home(), lambda: _pool("jev").entries()))
+    return _ENGINE[0]
+
+
+def _models(provider):
+    try:
+        from hermes_cli.models import curated_models_for_provider
+        return [m[0] if isinstance(m, (tuple, list)) else str(m) for m in curated_models_for_provider(provider)][:40]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+@router.get("/router")
+def get_router():
+    """Router state for the Desktop page: settings, Jev key state, load, learning stats, recent picks."""
+    engine = _engine()
+    status = engine.status()
+    accounts = {}
+    for provider in ROUTER_PROVIDERS:
+        readings = (LIVE.get(provider) or {}).get("accounts", {})
+        try:
+            entries = _pool(provider).entries()
+        except Exception:  # noqa: BLE001
+            entries = []
+        accounts[provider] = [{"id": e.id, "label": e.label or e.id, "peak": (readings.get(e.id) or {}).get("peak")}
+                              for e in entries if getattr(e, "last_status", None) != "dead"]
+    return {**status, "accounts": accounts, "models": {p: _models(p) for p in ROUTER_PROVIDERS}}
+
+
+@router.post("/router/settings")
+def save_router(body: dict):
+    allowed = set(router_engine.router.DEFAULTS)
+    changes = {k: v for k, v in (body or {}).items() if k in allowed}
+    try:
+        settings = _engine().save(changes)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(400, str(error))
+    _log("anthropic", "schedule", f"Router settings changed: {', '.join(sorted(changes)) or 'nothing'}")
+    return {"settings": settings}
+
+
+@router.post("/router/try")
+def try_router(body: dict):
+    """Decide for a sample message without recording it. use_jev=true spends one Jev call."""
+    text = str((body or {}).get("text") or "")[:2000]
+    decision = _engine().decide(text, log=False, use_jev=bool((body or {}).get("use_jev")))
+    return {"decision": decision}
+
+
+@router.post("/router/feedback")
+def router_feedback(body: dict):
+    try:
+        correct = _engine().store.feedback(int((body or {}).get("id")), str((body or {}).get("label") or ""))
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "Unknown decision.")
+    return {"learned": correct}
+
+
+@router.post("/router/check-key")
+def router_check_key(body: dict | None = None):
+    return {"jev": _engine().jev_status(force=True)}
 
 
 @router.get("/report")
