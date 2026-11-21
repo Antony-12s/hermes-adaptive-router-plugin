@@ -55,4 +55,4 @@ class UsageTests(unittest.TestCase):
             harp.track_account(session_id="s-1", provider="openai-codex", usage={"total_tokens": 99})  # fallback call
             harp.track_account(session_id="other", provider="anthropic", usage={"total_tokens": 7})
             activity = harp._sibling("pool_state").account_activity(Path(directory) / "harp-activity.sqlite3", "anthropic")
-        self.assertEqual(activity, {"work@example.com": {"tokens_24h": 42, "used_by": ["desktop"]}})
+        self.assertEqual(activity, {"work@example.com": {"tokens_24h": 42, "requests_24h": 1, "price_24h": None, "used_by": ["desktop"]}})

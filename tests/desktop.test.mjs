@@ -213,6 +213,23 @@ test('each account row carries its own session and week quota; no separate provi
   assert.equal(app.nodes(page, n => n.props?.['aria-label'] === '5h: 25% used').length, 0)
 })
 
+test('tokens card shows the estimated cost and request count', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results[0].data.accounts[0].requests_24h = 424
+  app.results[0].data.accounts[0].price_24h = 37.82
+  const page = app.render()
+  const text = app.text(page)
+  assert.match(text, /\$37\.82 at API prices/)
+  assert.match(text, /424 requests/)
+})
+
+test('tokens card without a price estimate just shows requests', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results[0].data.accounts[0].requests_24h = 5
+  app.results[0].data.accounts[0].price_24h = null
+  assert.doesNotMatch(app.text(app.render()), /at API prices/)
+})
+
 test('reset countdown counts down and lives under its own bar', () => {
   const app = fixture({ configured: false, usage: [] })
   const now = Date.parse('2026-11-21T23:00:00+07:00')

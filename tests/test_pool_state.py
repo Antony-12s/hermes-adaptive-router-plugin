@@ -94,11 +94,19 @@ class TrackerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             db = Path(directory) / "t.sqlite3"
             now = 1_000_000.0
-            state.record_call(db, "anthropic", "a", "s1", "desktop", 120, now - 25 * 3600)
-            state.record_call(db, "anthropic", "a", "s1", "desktop", 30, now - 60)
-            state.record_call(db, "anthropic", "a", "s2", "telegram", 20, now - 10)
+            state.record_call(db, "anthropic", "a", "s1", "desktop", 120, now - 25 * 3600, model="claude-opus-5-5")
+            state.record_call(db, "anthropic", "a", "s1", "desktop", 30, now - 60, model="claude-opus-5-5")
+            state.record_call(db, "anthropic", "a", "s2", "telegram", 20, now - 10, model="claude-opus-5-5")
             state.record_call(db, "anthropic", "a", "s3", "cli", None, now - 3600)
             summary = state.account_activity(db, "anthropic", now)
             self.assertEqual(summary["a"]["tokens_24h"], 50)
+            self.assertEqual(summary["a"]["requests_24h"], 3)
+            self.assertAlmostEqual(summary["a"]["price_24h"], state.estimate_price("claude-opus-5-5", 50), places=6)
             self.assertEqual(summary["a"]["used_by"], ["desktop", "telegram"])
             self.assertEqual(state.account_activity(Path(directory) / "missing.sqlite3", "anthropic", now), {})
+
+    def test_estimate_price_known_and_unknown_models(self):
+        self.assertAlmostEqual(state.estimate_price("claude-opus-5-5", 1_000_000), 18.0)
+        self.assertAlmostEqual(state.estimate_price("gpt-6-mini", 1_000_000), 0.6)
+        self.assertIsNone(state.estimate_price("some-mystery-model", 1_000_000))
+        self.assertIsNone(state.estimate_price("claude-opus-5-5", None))

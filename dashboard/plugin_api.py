@@ -158,6 +158,8 @@ def get_accounts(provider: str):
          "status": entry.get("last_status") or "active",
          "usage": readings.get(entry.get("id")),
          "tokens_24h": (activity.get(entry.get("label") or entry.get("id")) or {}).get("tokens_24h"),
+         "requests_24h": (activity.get(entry.get("label") or entry.get("id")) or {}).get("requests_24h"),
+         "price_24h": (activity.get(entry.get("label") or entry.get("id")) or {}).get("price_24h"),
          "used_by": (activity.get(entry.get("label") or entry.get("id")) or {}).get("used_by", []),
          "parked": parked.get(entry.get("id")),
          "schedule": (schedules.get(entry.get("id")) or {}).get("every")}

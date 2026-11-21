@@ -11,6 +11,7 @@ const KEY_PROVIDERS = ['jev']   // accounts are API keys: no sign-in flow, no us
 const TYPESAFE_CONSOLE = 'https://console.typesafe.ai/home'
 const number = new Intl.NumberFormat()
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
+const usd = new Intl.NumberFormat('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 let rest
 let openExternal
 const post = (path, body) => rest(path, { method: 'POST', body, timeoutMs: 180000 })
@@ -161,13 +162,14 @@ function Meter({ percent, label }) {
     h('span', null, `${number.format(percent)}%`))
 }
 
-function SummaryCard({ title, value, detail, percent }) {
+function SummaryCard({ title, value, detail, percent, lines }) {
   return h('div', { className: 'harp-card' },
     h('div', { className: 'harp-card-k' }, title),
     h('div', { className: 'harp-card-v' }, value),
     Number.isFinite(percent) && h('span', { className: `harp-bar${percent >= 90 ? ' bad' : percent >= 75 ? ' warn' : ''}`, 'aria-hidden': true },
       h('i', { style: { width: `${Math.max(0, Math.min(100, percent))}%` } })),
-    h('div', { className: 'harp-card-s' }, detail))
+    detail && h('div', { className: 'harp-card-s' }, detail),
+    ...(lines || []).filter(Boolean).map((line, i) => h('div', { className: 'harp-card-s', key: i }, line)))
 }
 
 const ROUTER_LABEL = { anthropic: 'anthropic', 'openai-codex': 'Codex' }
@@ -374,6 +376,8 @@ function Accounts({ query, canAct = false, onAction = () => {}, keyed = false })
   const topWeek = top(WEEK, 1)
   const inRotation = rows.filter(row => usable(row)).length
   const tokens = rows.reduce((sum, row) => sum + (row.tokens_24h || 0), 0)
+  const requests24h = rows.reduce((sum, row) => sum + (row.requests_24h || 0), 0)
+  const price24h = rows.some(row => row.price_24h != null) ? rows.reduce((sum, row) => sum + (row.price_24h || 0), 0) : null
   return h('div', null,
     h(QueryState, { query, label: 'accounts and quota' }),
     data && h('div', null,
@@ -384,12 +388,20 @@ function Accounts({ query, canAct = false, onAction = () => {}, keyed = false })
         h(SummaryCard, { title: 'In rotation', value: `${inRotation} / ${rows.length}`, detail: inRotation === rows.length ? 'all usable' : `${rows.length - inRotation} parked or blocked` }),
         h(SummaryCard, { title: 'Keys working', value: rows.filter(r => r.usage?.check).length ? `${rows.filter(r => r.usage?.check?.ok).length} / ${rows.filter(r => r.usage?.check).length}` : '–', detail: 'from the last key check' }),
         h(SummaryCard, { title: 'Models', value: (rows.find(r => r.usage?.check?.models?.length)?.usage.check.models || []).join(', ') || '–', detail: 'offered to these keys' }),
-        h(SummaryCard, { title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–', detail: tokens ? 'counted by HARP' : 'counting starts with the next request' }))
+        h(SummaryCard, {
+          title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–',
+          detail: tokens ? null : 'counting starts with the next request',
+          lines: tokens ? [price24h != null && `$${usd.format(price24h)} at API prices`, requests24h ? `${number.format(requests24h)} requests` : null] : []
+        }))
       : h('div', { className: 'harp-cards' },
         h(SummaryCard, { title: 'In rotation', value: `${inRotation} / ${rows.length}`, detail: inRotation === rows.length ? 'all usable' : `${rows.length - inRotation} parked or blocked` }),
         h(SummaryCard, { title: 'Highest session', value: topSession ? `${number.format(topSession.value)}%` : '–', detail: topSession ? topSession.label : 'read live usage', percent: topSession?.value }),
         h(SummaryCard, { title: 'Highest week', value: topWeek ? `${number.format(topWeek.value)}%` : '–', detail: topWeek ? topWeek.label : 'read live usage', percent: topWeek?.value }),
-        h(SummaryCard, { title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–', detail: tokens ? 'counted by HARP' : 'counting starts with the next request' })),
+        h(SummaryCard, {
+          title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–',
+          detail: tokens ? null : 'counting starts with the next request',
+          lines: tokens ? [price24h != null && `$${usd.format(price24h)} at API prices`, requests24h ? `${number.format(requests24h)} requests` : null] : []
+        })),
       h(Section, { title: 'POOL ACCOUNTS' }, data.accounts.length
         ? keyed ? h(Table, { label: 'Pool accounts', headings: ['#', 'Key', 'Check', 'Tokens, 24 h', 'Used by', 'State', ''], rows: rows.map((row, index) => ({ key: row.id || index, cells: [index + 1,
               h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${usable(row) ? '' : ' off'}`, 'aria-hidden': true }), row.label),

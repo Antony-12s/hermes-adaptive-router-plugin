@@ -242,8 +242,23 @@ def record_call(db, provider, label, session, platform, tokens, now=None, model=
         con.execute("DELETE FROM sessions WHERE last_seen < ?", (now - KEEP,))
 
 
+PRICE_PER_MTOK = [     # (substring, $ per 1M tokens, blended input+output estimate) — first match wins, so size
+    ("mini", 0.6), ("opus", 18.0), ("sonnet", 4.5), ("haiku", 1.0), ("fable", 3.0),   # qualifiers precede family
+    ("gpt-6.2", 9.0), ("gpt-6.1", 7.0), ("gpt-6", 6.0),
+]
+
+
+def estimate_price(model, tokens):
+    """Rough $ for `tokens` of `model`, blending input/output into one rate. None if unknown or no tokens."""
+    if not model or not isinstance(tokens, (int, float)):
+        return None
+    name = model.lower()
+    match = next((p for key, p in PRICE_PER_MTOK if key in name), None)
+    return round(tokens / 1_000_000 * match, 6) if match is not None else None
+
+
 def account_activity(db, provider, now=None):
-    """{label: {"tokens_24h": n, "used_by": [platform, ...]}} from the tracker database."""
+    """{label: {"tokens_24h", "requests_24h", "price_24h", "used_by"}} from the tracker database."""
     now = time.time() if now is None else now
     if not Path(db).is_file():
         return {}
@@ -254,14 +269,26 @@ def account_activity(db, provider, now=None):
                 " UNION ALL SELECT label, tokens FROM calls WHERE provider = ? AND bucket >= ?) GROUP BY label",
                 (provider, now - 86400, provider, now - 86400)):
             if total:
-                out.setdefault(label, {"tokens_24h": 0, "used_by": []})["tokens_24h"] = total
+                out.setdefault(label, _blank_activity())["tokens_24h"] = total
+        for label, model, tokens, requests in con.execute(
+                "SELECT label, model, SUM(tokens), SUM(requests) FROM calls WHERE provider = ? AND bucket >= ?"
+                " GROUP BY label, model", (provider, now - 86400)):
+            entry = out.setdefault(label, _blank_activity())
+            entry["requests_24h"] += requests or 0
+            price = estimate_price(model, tokens)
+            if price is not None:
+                entry["price_24h"] = (entry["price_24h"] or 0) + price
         rows = con.execute("SELECT label, platform FROM sessions WHERE provider = ? AND last_seen >= ?"
                            " ORDER BY platform", (provider, now - ACTIVE_MINUTES * 60))
         for label, platform in rows:
-            used = out.setdefault(label, {"tokens_24h": 0, "used_by": []})["used_by"]
+            used = out.setdefault(label, _blank_activity())["used_by"]
             if platform not in used:
                 used.append(platform)
     return out
+
+
+def _blank_activity():
+    return {"tokens_24h": 0, "requests_24h": 0, "price_24h": None, "used_by": []}
 
 
 def last_seen(db):
