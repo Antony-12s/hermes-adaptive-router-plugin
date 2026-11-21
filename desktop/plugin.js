@@ -83,7 +83,7 @@ const CSS = `
 .harp-share{display:inline-block;width:72px;height:5px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;vertical-align:middle;margin-right:6px}
 .harp-share>i{display:block;height:100%;background:var(--ui-accent)}
 .harp-heat-wrap{overflow-x:auto;max-width:100%}
-.harp-heat{display:grid;grid-template-columns:72px repeat(24,minmax(0,1fr));gap:2px;font-size:.625rem;color:var(--ui-text-tertiary);margin-top:4px;width:max-content;min-width:100%;max-width:760px;box-sizing:border-box}
+.harp-heat{display:grid;grid-template-columns:72px repeat(24,minmax(0,1fr));gap:2px;font-size:.625rem;color:var(--ui-text-tertiary);margin-top:4px;width:100%;max-width:760px;box-sizing:border-box}
 .harp-heat-cell{height:14px;border-radius:2px;background:var(--ui-bg-quaternary)}
 .harp-check{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
 .harp-check i{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ui-accent)}
