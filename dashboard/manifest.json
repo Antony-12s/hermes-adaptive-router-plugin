@@ -1,0 +1,10 @@
+{
+  "name": "harp",
+  "label": "HARP Usage",
+  "icon": "BarChart3",
+  "version": "0.1.0",
+  "tab": {"path": "/harp", "position": "end"},
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

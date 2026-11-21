@@ -3,5 +3,6 @@
   "primary_model": "vendor/primary-model",
   "fast_model": "vendor/fast-model",
   "max_input_chars": 12000,
-  "allow_tools": false
+  "allow_tools": false,
+  "daily_token_quotas": {}
 }

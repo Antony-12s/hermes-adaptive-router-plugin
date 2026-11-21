@@ -1,0 +1,74 @@
+.harp-usage {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 78rem;
+  margin-inline: auto;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.harp-usage h1 { font-size: 1.75rem; font-weight: 650; }
+.harp-usage h2 { font-size: 1.125rem; font-weight: 650; }
+.harp-muted { opacity: 0.8; }
+
+.harp-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.harp-panels { display: grid; gap: 1rem; }
+
+.harp-panel {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 0.65rem;
+  padding: 1rem;
+}
+
+.harp-filter { display: flex; align-items: center; gap: 0.5rem; }
+
+.harp-usage button,
+.harp-usage select {
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 0.4rem;
+  background: var(--background, Canvas);
+  color: inherit;
+}
+
+.harp-usage button:disabled { opacity: 0.65; }
+.harp-table-scroll { overflow-x: auto; }
+.harp-usage table { width: 100%; border-collapse: collapse; text-align: start; }
+
+.harp-usage th,
+.harp-usage td {
+  border-bottom: 1px solid var(--border, currentColor);
+  padding: 0.625rem;
+  text-align: start;
+  vertical-align: middle;
+}
+
+.harp-usage tbody tr:last-child > * { border-bottom: 0; }
+.harp-quota { display: grid; gap: 0.25rem; min-width: 8rem; }
+.harp-quota progress { width: 100%; }
+.harp-over-quota { font-weight: 650; }
+.harp-usage .harp-flow {
+  display: grid;
+  gap: 1rem;
+  padding-inline-start: 1.6rem;
+}
+
+.harp-usage .harp-flow li {
+  border-inline-start: 2px solid currentColor;
+  padding-inline-start: .8rem;
+}
+
+.harp-usage nav button[aria-pressed="true"] {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: .25em;
+}

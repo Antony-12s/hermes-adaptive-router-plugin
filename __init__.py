@@ -2,7 +2,10 @@
 
 import json
 import os
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -64,8 +67,17 @@ def register(ctx):
     config_path = os.environ.get("HARP_CONFIG")
     if not config_path:
         return
-    with Path(config_path).open(encoding="utf-8-sig") as config_file:
-        policy = RoutingPolicy(**json.load(config_file))
+    path = Path(config_path).resolve()
+    with path.open(encoding="utf-8-sig") as config_file:
+        config = json.load(config_file)
+    quotas = config.pop("daily_token_quotas", {})
+    if not isinstance(quotas, dict) or any(
+        not account or account.strip() != account or account == "Unassigned"
+        or type(limit) is not int or limit <= 0
+        for account, limit in quotas.items()
+    ):
+        raise ValueError("daily_token_quotas must map account labels to positive integers")
+    policy = RoutingPolicy(**config)
 
     def on_llm_request(request, provider, model, api_mode, **_metadata):
         return route_request(
@@ -73,3 +85,64 @@ def register(ctx):
         )
 
     ctx.register_middleware("llm_request", on_llm_request)
+
+    if quotas:
+        register_usage(ctx, path, policy.provider, quotas)
+
+
+def register_usage(ctx, config_path, tracked_provider, quotas):
+    database = config_path.with_suffix(".usage.sqlite3")
+    configured_account = os.environ.get("HARP_ACCOUNT", "").strip()
+    account = configured_account if configured_account in quotas else "Unassigned"
+    tag = os.environ.get("HARP_USAGE_TAG", "").strip() or "default"
+    with closing(sqlite3.connect(database)) as db:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_usage (
+                day TEXT NOT NULL,
+                account TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                tokens INTEGER NOT NULL,
+                requests INTEGER NOT NULL,
+                unmetered INTEGER NOT NULL,
+                PRIMARY KEY (day, account, tag, provider, model)
+            )
+        """)
+
+    def on_response(provider=None, model=None, response_model=None, usage=None, **_metadata):
+        if not isinstance(provider, str) or not provider:
+            return
+        effective_model = response_model or model
+        if not isinstance(effective_model, str) or not effective_model:
+            return
+        tokens = reported_tokens(usage)
+        attributed_account = account if provider == tracked_provider else "Unassigned"
+        day = datetime.now(timezone.utc).date().isoformat()
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute("""
+                INSERT INTO daily_usage VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                ON CONFLICT (day, account, tag, provider, model) DO UPDATE SET
+                    tokens = tokens + excluded.tokens,
+                    requests = requests + 1,
+                    unmetered = unmetered + excluded.unmetered
+            """, (day, attributed_account, tag, provider, effective_model,
+                  tokens if tokens is not None else 0, int(tokens is None)))
+
+    ctx.register_hook("post_api_request", on_response)
+
+
+def reported_tokens(usage):
+    if not isinstance(usage, dict):
+        return None
+    total = usage.get("total_tokens")
+    if type(total) is int and 0 <= total < 2**62:
+        return total
+    for input_key, output_key in (
+        ("input_tokens", "output_tokens"),
+        ("prompt_tokens", "completion_tokens"),
+    ):
+        counts = (usage.get(input_key), usage.get(output_key))
+        if all(type(count) is int and 0 <= count < 2**61 for count in counts):
+            return sum(counts)
+    return None

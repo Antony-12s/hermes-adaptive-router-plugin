@@ -28,7 +28,8 @@ compatible with the same provider request options and output limits. HARP
 registers its middleware only when the Hermes process has `HARP_CONFIG` set.
 
 Install the checkout as a user plugin. For a default Hermes home, copy
-`plugin.yaml` and `__init__.py` into `~/.hermes/plugins/harp/`. For a custom
+`plugin.yaml`, `__init__.py`, and the `dashboard/` directory into
+`~/.hermes/plugins/harp/`. For a custom
 home or profile, use its plugin directory. Then run `hermes plugins enable harp`.
 Start or restart the gateway with the same `HARP_CONFIG` environment variable.
 
@@ -38,6 +39,34 @@ configure a distinct backup route in
 HARP scopes its override to the configured primary route, so a distinct
 fallback route passes through. The alternate model receives the full input via
 the configured provider.
+
+## Account Pool and tagged usage
+
+The **Accounts & usage** view uses Hermes' built-in credential pool and
+account usage APIs. It does not require the Account Pool or Quota plugins.
+The provider selector offers Anthropic, Jev by TypeSafe, and OpenAI Codex.
+The account list shows labels and recorded status. Provider quota is for
+the active profile's login, with no inferred mapping to individual rows.
+Jev lists credentials saved under `jev` or `custom:jev`; Jev quota
+fetching is unavailable. **Diagram** shows routing and usage collection.
+
+In `harp.json`, set `daily_token_quotas` to a mapping such as
+`{"work": 100000, "personal": 50000}`. The limits are local daily token
+budgets and reset in the dashboard at midnight UTC. They do not enforce
+provider limits or alter routing. An empty mapping disables recording.
+
+Start the Hermes gateway and `hermes dashboard` with the same absolute
+`HARP_CONFIG` path and open **HARP Usage** in the dashboard. To group
+usage by workload, set `HARP_USAGE_TAG` in the gateway process environment
+(for example, `development`). Set `HARP_ACCOUNT` only for a process pinned
+to that one account on the configured provider. Leave it unset for a
+rotating credential pool. Unlabeled requests, unknown labels, and other
+providers are grouped under **Unassigned**.
+
+Totals come from successful main model requests observed by the gateway.
+Responses without token counts show as unmetered. Auxiliary calls and
+failed attempts are outside these totals. The SQLite file beside your
+config holds aggregate counts and labels, with no credentials or chat text.
 
 ## Local checks
 
