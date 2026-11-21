@@ -1,0 +1,7 @@
+{
+  "provider": "openrouter",
+  "primary_model": "vendor/primary-model",
+  "fast_model": "vendor/fast-model",
+  "max_input_chars": 12000,
+  "allow_tools": false
+}
