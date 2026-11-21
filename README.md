@@ -68,6 +68,18 @@ Responses without token counts show as unmetered. Auxiliary calls and
 failed attempts are outside these totals. The SQLite file beside your
 config holds aggregate counts and labels, with no credentials or chat text.
 
+## Desktop UI
+
+The optional `desktop/plugin.js` adds a **HARP** sidebar page to Hermes Desktop.
+It reads the same authenticated `/accounts` and `/usage` endpoints as the web
+Dashboard and includes the request-flow diagram. It is read-only; local daily
+budgets are monitoring thresholds, not provider limits. The Agent and Desktop
+halves are enabled separately. After installing the package, rescan plugins in
+Desktop's Capabilities → Plugins and enable the Desktop half. The backend API
+may require a full Desktop quit and reopen to mount after a fresh install.
+The page still shows account metadata when `HARP_CONFIG` is unset, but routing
+and tagged usage collection remain inactive.
+
 ## Local checks
 
 ```powershell
