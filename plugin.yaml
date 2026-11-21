@@ -2,3 +2,5 @@ name: harp
 version: "0.1.0"
 description: Routes small Hermes chat requests to a configured model on the same provider.
 kind: standalone
+provides_hooks:
+  - post_api_request
