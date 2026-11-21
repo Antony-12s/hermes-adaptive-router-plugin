@@ -2,7 +2,7 @@
 import { Button, Codicon, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, host, Input, PALETTE_AREA, ROUTES_AREA, SegmentedControl, SIDEBAR_NAV_AREA, Switch, useQuery } from '@hermes/plugin-sdk'
 import * as sdk from '@hermes/plugin-sdk'
 
-import { createElement as h, useEffect, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useState } from 'react'
 
 const ID = 'harp'
 const ROUTE = '/harp'
@@ -461,22 +461,21 @@ function useProviderAccounts(provider) {
 function ProviderSummary({ provider, title, query, now, onOpen }) {
   const rows = query.data?.accounts || []
   const keyed = KEY_PROVIDERS.includes(provider)
-  const header = h('div', { className: 'harp-tools' },
+  const label = h(Fragment, null, title, h('span', { className: 'harp-grow' }),
     h(Button, { size: 'sm', variant: 'ghost', onClick: () => onOpen(provider) }, h(Codicon, { name: 'link-external', size: '0.8rem' }), `Open ${title.toLowerCase()}`))
-  if (!query.data) return h(Section, { title }, h(QueryState, { query, label: title.toLowerCase() }))
-  if (!rows.length) return h(Section, { title }, h('div', { className: 'harp-empty' }, 'No accounts.'), header)
+  if (!query.data) return h(Section, { title: label }, h(QueryState, { query, label: title.toLowerCase() }))
+  if (!rows.length) return h(Section, { title: label }, h('div', { className: 'harp-empty' }, 'No accounts.'))
   const money = row => (row.price_24h != null ? `$${usd.format(row.price_24h)}` : '–')
   const reqs = row => (row.requests_24h ? number.format(row.requests_24h) : '–')
   const toks = row => (row.tokens_24h ? compact.format(row.tokens_24h) : '–')
   const name = row => h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${usable(row) ? '' : ' off'}`, 'aria-hidden': true }), row.label)
-  return h(Section, { title },
+  return h(Section, { title: label },
     keyed
       ? h(Table, { label: title, headings: ['Key', 'Check', 'Tokens, 24 h', 'Cost', 'Requests'], rows: rows.map((row, i) => ({ key: row.id || i,
           cells: [name(row), h(KeyCheck, { row }), toks(row), money(row), reqs(row)] })) })
       : h(Table, { label: title, headings: ['Account', 'Session (5 h)', 'Week', 'Tokens, 24 h', 'Cost', 'Requests'], rows: rows.map((row, i) => ({ key: row.id || i,
           cells: [name(row), h(LeftCell, { row, window: pickWindow(row, SESSION, 0), name: 'session', now }),
-            h(LeftCell, { row, window: pickWindow(row, WEEK, 1), name: 'week', now }), toks(row), money(row), reqs(row)] })) }),
-    header)
+            h(LeftCell, { row, window: pickWindow(row, WEEK, 1), name: 'week', now }), toks(row), money(row), reqs(row)] })) }))
 }
 
 function ActivityHeat() {

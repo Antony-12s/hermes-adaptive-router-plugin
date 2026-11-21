@@ -23,6 +23,7 @@ function fixture(usage) {
     Intl, Date, Set, JSON, Math, Number, String, document: {
       head: { appendChild() {} }, createElement: () => ({ dataset: {}, remove() {} })
     },
+    Fragment: ({ children }) => children,
     host: { navigate: path => requests.push(path), notify: message => requests.push({ notify: message }) },
     PALETTE_AREA: 'palette', ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar',
     Button: ({ children, ...props }) => ({ type: 'button', props, children }),
@@ -63,7 +64,8 @@ function fixture(usage) {
     visit(tree)
     return matches
   }
-  const text = tree => nodes(tree, n => typeof n.type === 'string').flatMap(n => n.children.filter(c => typeof c === 'string')).join(' ')
+  const flatten = list => list.flatMap(c => (Array.isArray(c) ? flatten(c) : [c]))
+  const text = tree => nodes(tree, n => typeof n.type === 'string').flatMap(n => flatten(n.children).filter(c => typeof c === 'string')).join(' ')
   return { registrations, requests, render, nodes, text, slots, results, countdown: (...args) => sandbox.countdown(...args) }
 }
 
