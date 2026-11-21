@@ -82,7 +82,8 @@ const CSS = `
 .harp-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 8px;font-size:.6875rem;color:var(--ui-text-tertiary)}
 .harp-share{display:inline-block;width:72px;height:5px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;vertical-align:middle;margin-right:6px}
 .harp-share>i{display:block;height:100%;background:var(--ui-accent)}
-.harp-heat{display:grid;grid-template-columns:72px repeat(24,minmax(8px,1fr));gap:2px;font-size:.625rem;color:var(--ui-text-tertiary);margin-top:4px}
+.harp-heat-wrap{overflow-x:auto;max-width:100%}
+.harp-heat{display:grid;grid-template-columns:72px repeat(24,minmax(0,1fr));gap:2px;font-size:.625rem;color:var(--ui-text-tertiary);margin-top:4px;width:max-content;min-width:100%;max-width:760px;box-sizing:border-box}
 .harp-heat-cell{height:14px;border-radius:2px;background:var(--ui-bg-quaternary)}
 .harp-check{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
 .harp-check i{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ui-accent)}
@@ -487,12 +488,12 @@ function ActivityHeat() {
     h('div', { className: 'harp-tools' }, h('span', { className: 'harp-grow' }),
       h(SegmentedControl, { options: [{ id: 'day', label: '24 h' }, { id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }], value: span, onChange: setSpan })),
     h(QueryState, { query, label: 'activity' }),
-    days.length ? h('div', { className: 'harp-heat' },
+    days.length ? h('div', { className: 'harp-heat-wrap' }, h('div', { className: 'harp-heat' },
       h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
       ...days.flatMap(day => [h('span', { key: `l${day.date}` }, `${day.dow} ${day.date}`),
         ...day.tokens.map((value, hr) => h('i', { key: `${day.date}-${hr}`, className: 'harp-heat-cell',
           title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens`,
-          style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))])) : null)
+          style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))]))) : null)
 }
 
 function SummaryView({ onOpen }) {
@@ -705,12 +706,12 @@ function GroupTable({ title, label, rows, extra }) {
 
 function HeatMap({ chart }) {
   const top = Math.max(0, ...chart.flatMap(day => day.tokens))
-  return h(Section, { title: 'TOKENS BY HOUR, LAST 7 DAYS' }, h('div', { className: 'harp-heat' },
+  return h(Section, { title: 'TOKENS BY HOUR, LAST 7 DAYS' }, h('div', { className: 'harp-heat-wrap' }, h('div', { className: 'harp-heat' },
     h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
     ...chart.flatMap(day => [h('span', { key: `l${day.date}` }, `${day.dow} ${day.date}`),
       ...day.tokens.map((value, hr) => h('i', { key: `${day.date}-${hr}`, className: 'harp-heat-cell',
         title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens`,
-        style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))])))
+        style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))]))))
 }
 
 function ReportView({ provider }) {
