@@ -268,7 +268,7 @@ test('top row picks Diagram or a provider; the second row holds the five views',
   const app = fixture({ configured: false, usage: [] })
   const page = app.render()
   const groups = JSON.parse(JSON.stringify(app.nodes(page, n => n.props?.role === 'group').map(g => g.children.map(b => b.children[0]))))
-  assert.deepEqual(groups[0], ['Diagram', 'Type-safe', 'anthropic', 'Codex'])
+  assert.deepEqual(groups[0], ['Summary', 'Diagram', 'Type-safe', 'anthropic', 'Codex'])
   assert.deepEqual(groups[1], ['Accounts & usage', 'Activity', 'Report', 'Health', 'Alerts'])
   app.results.router = { data: routerData(), refetch() {} }
   tab(app, 'Diagram').props.onClick()
@@ -378,4 +378,22 @@ test('clock times are 24-hour', () => {
   const text = app.text(app.render())
   assert.match(text, /Live usage read \d{2}:\d{2}:\d{2}/)
   assert.doesNotMatch(text, /\b[AP]M\b/)
+})
+
+
+test('summary shows every provider with what is left, plus the tokens card', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results[0].data.accounts[0].requests_24h = 424
+  app.results[0].data.accounts[0].price_24h = 37.82
+  app.results.router = { data: routerData(), refetch() {} }
+  app.slots[0] = 'summary'
+  const page = app.render()
+  const text = app.text(page)
+  for (const part of [/ANTHROPIC/, /CODEX/, /TYPE-SAFE/, /32% left/, /100% left/, /resets in \d+d \d+h/, /\$\d+\.\d{2} at API prices/, /requests/, /Jev API found/])
+    assert.match(text, part)
+  const keys = app.requests.filter(r => r?.queryKey?.[1] === 'accounts').map(r => r.queryKey[2])
+  for (const p of ['anthropic', 'openai-codex', 'jev']) assert.ok(keys.includes(p), p)
+  assert.equal(app.nodes(page, n => n.props?.role === 'group' && app.text(n).includes('Activity')).length, 0)
+  assert.equal(app.nodes(page, n => n.type === 'button' && n.children.includes('Add account')).length, 0)
+  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal week: 32% left').length, 2)
 })

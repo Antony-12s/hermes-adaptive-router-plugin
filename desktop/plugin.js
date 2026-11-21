@@ -425,6 +425,90 @@ function Accounts({ query, canAct = false, onAction = () => {}, keyed = false })
         : h('div', { className: 'harp-empty' }, keyed ? 'No Type-safe keys yet. Use Add account to paste one.' : 'No accounts configured for this provider.'))))
 }
 
+// ---------------------------------------------------------------- Summary: every provider at a glance
+function LeftMeter({ used, label }) {
+  if (!Number.isFinite(used)) return h('span', { className: 'harp-muted' }, 'No reading')
+  const left = Math.max(0, Math.min(100, Math.round(100 - used)))
+  return h('div', { className: 'harp-quota', 'aria-label': `${label}: ${left}% left` },
+    h('span', { className: `harp-bar${left <= 10 ? ' bad' : left <= 25 ? ' warn' : ''}`, 'aria-hidden': true }, h('i', { style: { width: `${left}%` } })),
+    h('span', null, `${left}% left`))
+}
+
+function LeftCell({ row, window, name, now }) {
+  if (!row.usage) return h('span', { className: 'harp-muted' }, 'Not read yet')
+  if (!window) return h('span', { className: 'harp-muted' }, '—')
+  return h('div', { className: 'harp-window' },
+    h(LeftMeter, { used: window.used_percent, label: `${row.label} ${name}` }),
+    h('span', { className: 'harp-reset', title: window.reset_at ? resetText(window.reset_at) : undefined },
+      window.reset_at ? countdown(window.reset_at, now) : 'not running'))
+}
+
+const SUMMARY_PROVIDERS = [['anthropic', 'ANTHROPIC'], ['openai-codex', 'CODEX'], ['jev', 'TYPE-SAFE']]
+
+function useProviderAccounts(provider) {
+  const query = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
+  const liveAt = query.data?.live_read_at
+  useEffect(() => {   // same read-only refresh as the provider tabs, at most every 5 minutes
+    if (!query.data || (liveAt && Date.now() / 1000 - liveAt < LIVE_MAX_AGE)) return
+    if (Date.now() - (liveRequested[provider] || 0) < LIVE_MAX_AGE * 1000) return
+    liveRequested[provider] = Date.now()
+    post('/pool/live', { provider }).then(() => query.refetch(), () => {})
+  }, [provider, !!query.data, liveAt])
+  return query
+}
+
+function ProviderSummary({ provider, title, query, now, onOpen }) {
+  const rows = query.data?.accounts || []
+  const keyed = KEY_PROVIDERS.includes(provider)
+  const header = h('div', { className: 'harp-tools' },
+    h(Button, { size: 'sm', variant: 'ghost', onClick: () => onOpen(provider) }, h(Codicon, { name: 'link-external', size: '0.8rem' }), `Open ${title.toLowerCase()}`))
+  if (!query.data) return h(Section, { title }, h(QueryState, { query, label: title.toLowerCase() }))
+  if (!rows.length) return h(Section, { title }, h('div', { className: 'harp-empty' }, 'No accounts.'), header)
+  const money = row => (row.price_24h != null ? `$${usd.format(row.price_24h)}` : '–')
+  const reqs = row => (row.requests_24h ? number.format(row.requests_24h) : '–')
+  const toks = row => (row.tokens_24h ? compact.format(row.tokens_24h) : '–')
+  const name = row => h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${usable(row) ? '' : ' off'}`, 'aria-hidden': true }), row.label)
+  return h(Section, { title },
+    keyed
+      ? h(Table, { label: title, headings: ['Key', 'Check', 'Tokens, 24 h', 'Cost', 'Requests'], rows: rows.map((row, i) => ({ key: row.id || i,
+          cells: [name(row), h(KeyCheck, { row }), toks(row), money(row), reqs(row)] })) })
+      : h(Table, { label: title, headings: ['Account', 'Session (5 h)', 'Week', 'Tokens, 24 h', 'Cost', 'Requests'], rows: rows.map((row, i) => ({ key: row.id || i,
+          cells: [name(row), h(LeftCell, { row, window: pickWindow(row, SESSION, 0), name: 'session', now }),
+            h(LeftCell, { row, window: pickWindow(row, WEEK, 1), name: 'week', now }), toks(row), money(row), reqs(row)] })) }),
+    header)
+}
+
+function SummaryView({ onOpen }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(timer) }, [])
+  const queries = SUMMARY_PROVIDERS.map(([provider]) => useProviderAccounts(provider))
+  const routerQuery = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 60000 })
+  const all = queries.flatMap((q, i) => (q.data?.accounts || []).map(row => ({ ...row, provider: SUMMARY_PROVIDERS[i][0] })))
+  const tokens = all.reduce((sum, row) => sum + (row.tokens_24h || 0), 0)
+  const requests = all.reduce((sum, row) => sum + (row.requests_24h || 0), 0)
+  const price = all.some(row => row.price_24h != null) ? all.reduce((sum, row) => sum + (row.price_24h || 0), 0) : null
+  const quota = all.filter(row => !KEY_PROVIDERS.includes(row.provider))
+  const usableCount = quota.filter(row => usable(row)).length
+  let lowest = null
+  for (const row of quota) for (const [pattern, fallback, kind] of [[SESSION, 0, '5 h'], [WEEK, 1, 'week']]) {
+    const w = pickWindow(row, pattern, fallback)
+    if (w && Number.isFinite(w.used_percent) && (!lowest || 100 - w.used_percent < lowest.left))
+      lowest = { left: Math.round(100 - w.used_percent), label: row.label, kind, reset: w.reset_at }
+  }
+  const jev = routerQuery.data?.jev
+  const [, jevTitle] = KEY_TEXT[jev?.state] || ['', 'Jev key not checked yet']
+  return h('div', null,
+    h('div', { className: 'harp-cards' },
+      h(SummaryCard, { title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–',
+        detail: tokens ? null : 'counting starts with the next request',
+        lines: tokens ? [price != null && `$${usd.format(price)} at API prices`, requests ? `${number.format(requests)} requests` : null] : [] }),
+      h(SummaryCard, { title: 'Accounts usable', value: `${usableCount} / ${quota.length}`, detail: 'anthropic and Codex' }),
+      h(SummaryCard, { title: 'Least left', value: lowest ? `${lowest.left}%` : '–', percent: lowest ? 100 - lowest.left : undefined,
+        detail: lowest ? `${lowest.label} · ${lowest.kind}${lowest.reset ? ` · ${countdown(lowest.reset, now)}` : ''}` : 'read live usage' }),
+      h(SummaryCard, { title: 'Jev', value: jev?.state === 'ok' ? 'ready' : jev?.state || '–', detail: jev?.state === 'ok' ? `${jevTitle} · ${jev.label}` : jevTitle })),
+    ...SUMMARY_PROVIDERS.map(([provider, title], i) => h(ProviderSummary, { key: provider, provider, title, query: queries[i], now, onOpen })))
+}
+
 function Budget({ account }) {
   if (account.quota_tokens == null) return 'No budget set'
   const limit = account.quota_tokens
@@ -738,9 +822,9 @@ function HarpPage() {
   const [busy, setBusy] = useState('')
   const [target, setTarget] = useState(null)
   const [lastProvider, setLastProvider] = useState('anthropic')
-  const diagram = top === 'diagram'
+  const diagram = top === 'diagram' || top === 'summary'   // overview pages: no provider tools or views
   const provider = diagram ? lastProvider : top
-  const pickTop = value => { setTop(value); if (value !== 'diagram') setLastProvider(value) }
+  const pickTop = value => { setTop(value); if (value !== 'diagram' && value !== 'summary') setLastProvider(value) }
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
   const usage = useQuery({ queryKey: [ID, 'usage'], queryFn: () => rest('/usage'), refetchInterval: 60000 })
   const canAct = ACTION_PROVIDERS.includes(provider)
@@ -771,7 +855,7 @@ function HarpPage() {
       h('h1', { className: 'harp-title' }, 'HARP'),
       !diagram && accounts.data && h('span', { className: 'harp-pill' }, accounts.data.accounts.length),
       h(SegmentedControl, { options: [
-        { id: 'diagram', label: 'Diagram' }, { id: 'jev', label: 'Type-safe' }, { id: 'anthropic', label: 'anthropic' }, { id: 'openai-codex', label: 'Codex' }
+        { id: 'summary', label: 'Summary' }, { id: 'diagram', label: 'Diagram' }, { id: 'jev', label: 'Type-safe' }, { id: 'anthropic', label: 'anthropic' }, { id: 'openai-codex', label: 'Codex' }
       ], value: top, onChange: pickTop }),
       h('span', { className: 'harp-grow' }),
       !diagram && h(Button, { size: 'sm', variant: 'ghost', 'aria-label': 'Refresh', disabled: accounts.isFetching || usage.isFetching,
@@ -784,7 +868,7 @@ function HarpPage() {
       h(SegmentedControl, { options: [{ id: 'usage', label: 'Accounts & usage' }, { id: 'activity', label: 'Activity' },
         { id: 'report', label: 'Report' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }], value: view, onChange: setView }),
       view === 'usage' && h('span', null, accounts.data?.live_read_at ? `Live usage read ${stamp(accounts.data.live_read_at * 1000, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Live usage not read yet')),
-    h('div', { className: 'harp-body' }, diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
+    h('div', { className: 'harp-body' }, top === 'summary' ? h(SummaryView, { onOpen: pickTop }) : diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
       : view === 'activity' ? h(ActivityView, { provider })
         : view === 'report' ? h(ReportView, { provider })
           : view === 'health' ? h(HealthView, { provider })
