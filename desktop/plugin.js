@@ -1,6 +1,7 @@
 // HARP Desktop page: accounts, live usage, balance, wake and sign-in through HARP's own backend.
 import { Button, Codicon, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, host, Input, PALETTE_AREA, ROUTES_AREA, SegmentedControl, SIDEBAR_NAV_AREA, Switch, useQuery } from '@hermes/plugin-sdk'
-import * as sdk from '@hermes/plugin-sdk'
+import * as sdk from '@hermes/plugin-sdk'
+
 import { createElement as h, useEffect, useState } from 'react'
 
 const ID = 'harp'
@@ -49,6 +50,8 @@ const CSS = `
 .harp-bar.warn>i{background:var(--ui-orange)}
 .harp-bar.bad>i{background:var(--ui-red)}
 .harp-quota{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.harp-window{display:flex;flex-direction:column;gap:2px}
+.harp-reset{font-size:.6875rem;color:var(--ui-text-tertiary);white-space:nowrap;font-variant-numeric:tabular-nums}
 .harp-account{display:flex;align-items:center;gap:6px}
 .harp-dot{width:6px;height:6px;border-radius:50%;background:var(--ui-accent);flex:none}
 .harp-dot.off{background:var(--ui-text-tertiary)}
@@ -336,13 +339,27 @@ function KeyCheck({ row }) {
     works ? `Key works · ${check.ms} ms` : `Key ${check.problem}`)
 }
 
-function WindowCell({ row, window, name }) {
+// Time left until a usage window resets, counting down ("resets in 3h 50m").
+function countdown(iso, now = Date.now()) {
+  const left = Math.floor((Date.parse(iso) - now) / 60000)
+  if (!Number.isFinite(left)) return ''
+  if (left <= 0) return 'resetting…'
+  const d = Math.floor(left / 1440), hr = Math.floor((left % 1440) / 60), m = left % 60
+  return `resets in ${d ? `${d}d ${hr}h` : hr ? `${hr}h ${String(m).padStart(2, '0')}m` : `${m}m`}`
+}
+
+function WindowCell({ row, window, name, now }) {
   if (!row.usage) return h('span', { className: 'harp-muted' }, 'Not read yet')
   if (!window) return h('span', { className: 'harp-muted' }, '—')
-  return h(Meter, { percent: window.used_percent, label: `${row.label} ${name}` })
+  return h('div', { className: 'harp-window' },
+    h(Meter, { percent: window.used_percent, label: `${row.label} ${name}` }),
+    h('span', { className: 'harp-reset', title: window.reset_at ? resetText(window.reset_at) : undefined },
+      window.reset_at ? countdown(window.reset_at, now) : 'not running'))
 }
 
 function Accounts({ query, canAct = false, onAction = () => {}, keyed = false }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(timer) }, [])
   const data = query.data
   const rows = (data?.accounts || []).map(row => ({ ...row, keyed }))
   const readable = rows.filter(row => row.usage)
@@ -378,16 +395,13 @@ function Accounts({ query, canAct = false, onAction = () => {}, keyed = false })
               h('span', { className: 'harp-status' }, row.used_by?.length ? row.used_by.join(', ') : 'idle'),
               h(AccountState, { row }),
               h(RowActions, { row, canAct, onAction })] })) })
-        : h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Session', 'Week', 'Resets', 'Tokens, 24 h', 'Used by', 'State', ''], rows: rows.map((row, index) => {
+        : h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Session (5 h)', 'Week', 'Tokens, 24 h', 'Used by', 'State', ''], rows: rows.map((row, index) => {
             const session = pickWindow(row, SESSION, 0)
             const week = pickWindow(row, WEEK, 1)
             return { key: row.id || index, cells: [index + 1,
               h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${usable(row) ? '' : ' off'}`, 'aria-hidden': true }), row.label),
-              h(WindowCell, { row, window: session, name: 'session' }),
-              h(WindowCell, { row, window: week, name: 'week' }),
-              h('span', { className: 'harp-status' }, row.usage ? [
-                session?.reset_at ? `Session ${resetText(session.reset_at)}` : 'Session not running',
-                week?.reset_at ? `Week ${resetText(week.reset_at)}` : null].filter(Boolean).join(' · ') : '—'),
+              h(WindowCell, { row, window: session, name: 'session', now }),
+              h(WindowCell, { row, window: week, name: 'week', now }),
               h('span', { className: 'harp-num' }, row.tokens_24h ? compact.format(row.tokens_24h) : '–'),
               h('span', { className: 'harp-status' }, row.used_by?.length ? row.used_by.join(', ') : 'idle'),
               h(AccountState, { row }),

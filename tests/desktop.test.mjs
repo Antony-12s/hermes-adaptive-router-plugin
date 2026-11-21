@@ -64,7 +64,7 @@ function fixture(usage) {
     return matches
   }
   const text = tree => nodes(tree, n => typeof n.type === 'string').flatMap(n => n.children.filter(c => typeof c === 'string')).join(' ')
-  return { registrations, requests, render, nodes, text, slots, results }
+  return { registrations, requests, render, nodes, text, slots, results, countdown: (...args) => sandbox.countdown(...args) }
 }
 
 test('HARP toolbar exposes its own account actions without invoking account-pool', () => {
@@ -204,10 +204,25 @@ test('each account row carries its own session and week quota; no separate provi
   const page = app.render()
   assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal session: 0% used').length, 1)
   assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal week: 68% used').length, 1)
-  assert.match(app.text(page), /Resets/)
   assert.doesNotMatch(app.text(page), /PROVIDER QUOTA/)
+  const headings = app.nodes(page, n => n.type === 'th').map(n => app.text(n) || n.children.join(''))
+  assert.equal(headings.some(x => /Resets/.test(x)), false)
+  assert.match(app.text(page), /not running/)
+  assert.match(app.text(page), /resets in \d+d \d+h/)
+
   assert.equal(app.nodes(page, n => n.props?.['aria-label'] === '5h: 25% used').length, 0)
 })
+
+test('reset countdown counts down and lives under its own bar', () => {
+  const app = fixture({ configured: false, usage: [] })
+  const now = Date.parse('2026-11-21T23:00:00+07:00')
+  const c = app.countdown
+  assert.equal(c('2026-11-21T23:42:00+07:00', now), 'resets in 42m')
+  assert.equal(c('2026-11-22T02:50:00+07:00', now), 'resets in 3h 50m')
+  assert.equal(c('2026-11-24T06:00:00+07:00', now), 'resets in 2d 7h')
+  assert.equal(c('2026-11-21T22:00:00+07:00', now), 'resetting…')
+})
+
 
 test('filters tagged usage, shows budgets, switches provider without losing query scope', () => {
   const app = fixture({ configured: true, day: '2026-11-21', accounts: [
