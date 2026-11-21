@@ -1,50 +1,90 @@
 // HARP Desktop page. Read-only; shares the plugin's authenticated backend.
-import { host, PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, useQuery } from '@hermes/plugin-sdk'
+import { Button, Codicon, host, PALETTE_AREA, ROUTES_AREA, SegmentedControl, SIDEBAR_NAV_AREA, useQuery } from '@hermes/plugin-sdk'
 import { createElement as h, useState } from 'react'
 
 const ID = 'harp'
 const ROUTE = '/harp'
-const providers = { anthropic: 'Anthropic', jev: 'Jev · TypeSafe', 'openai-codex': 'OpenAI Codex' }
 const number = new Intl.NumberFormat()
 let rest
 
+// Match the density, surfaces, and controls of the Accounts desktop page.
 const CSS = `
-.harp-desktop { box-sizing:border-box; height:100%; overflow:auto; padding:24px; color:var(--ui-text-primary); }
-.harp-desktop * { box-sizing:border-box; }
-.harp-desktop .harp-wrap { max-width:1000px; display:grid; gap:18px; }
-.harp-desktop .harp-head, .harp-desktop .harp-row { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; }
-.harp-desktop h1 { font-size:22px; font-weight:650; margin:0; }
-.harp-desktop h2 { font-size:15px; font-weight:600; margin:0 0 12px; }
-.harp-desktop p { margin:5px 0 0; }
-.harp-desktop .harp-muted { color:var(--ui-text-tertiary); font-size:12px; }
-.harp-desktop .harp-panels { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr)); gap:14px; }
-.harp-desktop .harp-panel { min-width:0; padding:16px; border:1px solid var(--ui-stroke-secondary); border-radius:10px; }
-.harp-desktop button, .harp-desktop select { color:inherit; background:transparent; border:1px solid var(--ui-stroke-secondary); border-radius:6px; padding:6px 10px; font:inherit; cursor:pointer; }
-.harp-desktop button:disabled { opacity:.55; cursor:default; }
-.harp-desktop button[aria-pressed=true] { border-color:var(--ui-accent); color:var(--ui-accent); }
-.harp-desktop .harp-table { width:100%; overflow-x:auto; }
-.harp-desktop table { width:100%; border-collapse:collapse; text-align:left; font-size:12px; }
-.harp-desktop th, .harp-desktop td { padding:9px 8px; border-bottom:1px solid var(--ui-stroke-secondary); text-align:left; vertical-align:top; }
-.harp-desktop .harp-flow { padding-left:22px; display:grid; gap:14px; }
-.harp-desktop .harp-flow li::marker { color:var(--ui-accent); }
-.harp-desktop progress { width:100%; accent-color:var(--ui-accent); }
+.harp-page{display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--ui-surface-background);color:var(--ui-text-secondary);font-size:.75rem}
+.harp-page *{box-sizing:border-box}
+.harp-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 16px 6px}
+.harp-title{font-size:.875rem;font-weight:600;color:var(--ui-text-primary);margin:0}
+.harp-pill{border-radius:999px;background:var(--ui-bg-quaternary);padding:1px 6px;font-size:.625rem;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums}
+.harp-grow{flex:1}
+.harp-sub{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 16px 8px;font-size:.6875rem;color:var(--ui-text-tertiary)}
+.harp-body{flex:1;overflow:auto;padding:2px 16px 28px}
+.harp-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:2px 0 6px}
+@media(max-width:850px){.harp-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:500px){.harp-cards{grid-template-columns:1fr}}
+.harp-card{min-width:0;border:1px solid var(--ui-stroke-secondary);border-radius:8px;padding:8px 10px;background:var(--ui-bg-card)}
+.harp-card-k{font-size:.6875rem;color:var(--ui-text-tertiary)}
+.harp-card-v{font-size:1.05rem;font-weight:600;margin-top:2px;color:var(--ui-text-primary);font-variant-numeric:tabular-nums}
+.harp-card-s{font-size:.6875rem;color:var(--ui-text-secondary);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.harp-section{display:flex;align-items:center;gap:6px;margin:16px 0 4px;font-size:.6875rem;font-weight:600;color:var(--ui-text-tertiary);text-transform:uppercase;letter-spacing:.04em}
+.harp-table-scroll{width:100%;overflow-x:auto}
+.harp-table{width:100%;border-collapse:collapse;font-size:.75rem}
+.harp-table th{text-align:left;font-weight:500;color:var(--ui-text-tertiary);font-size:.6875rem;padding:4px 8px;border-bottom:1px solid var(--ui-stroke-secondary);white-space:nowrap}
+.harp-table td,.harp-table tbody th{padding:6px 8px;border-bottom:1px solid var(--ui-stroke-tertiary);vertical-align:middle}
+.harp-table tbody th{text-align:left;font-weight:500;color:var(--ui-text-primary)}
+.harp-table tbody tr:hover td,.harp-table tbody tr:hover th{background:var(--ui-row-hover-background)}
+.harp-muted{color:var(--ui-text-tertiary);font-size:.6875rem}
+.harp-banner{display:flex;gap:8px;align-items:center;border:1px solid var(--ui-stroke-secondary);background:var(--ui-bg-card);border-radius:8px;padding:8px 10px;margin:10px 0;font-size:.75rem}
+.harp-bar{display:inline-block;width:96px;height:6px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;flex:none}
+.harp-bar>i{display:block;height:100%;background:var(--ui-accent)}
+.harp-bar.warn>i{background:var(--ui-orange)}
+.harp-bar.bad>i{background:var(--ui-red)}
+.harp-quota{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.harp-account{display:flex;align-items:center;gap:6px}
+.harp-dot{width:6px;height:6px;border-radius:50%;background:var(--ui-accent);flex:none}
+.harp-dot.off{background:var(--ui-text-tertiary)}
+.harp-status{font-size:.6875rem;color:var(--ui-text-tertiary)}
+.harp-select{background:var(--ui-bg-input);color:var(--ui-text-primary);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:3px 6px;font-size:.75rem}
+.harp-select option{background:var(--ui-bg-card);color:var(--ui-text-primary)}
+.harp-empty{padding:28px 8px;text-align:center;color:var(--ui-text-tertiary);font-size:.75rem}
+.harp-flow{list-style:none;margin:6px 0;padding:0;max-width:720px}
+.harp-flow li{display:flex;gap:10px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--ui-stroke-tertiary)}
+.harp-flow b{display:flex;align-items:center;justify-content:center;min-width:22px;height:22px;border-radius:6px;background:var(--ui-bg-quaternary);font-size:.6875rem;color:var(--ui-text-primary)}
+.harp-flow strong{font-size:.75rem;color:var(--ui-text-primary)}
+.harp-flow p{margin:2px 0 0;font-size:.6875rem;color:var(--ui-text-tertiary)}
 `
 
 function Table({ label, headings, rows }) {
-  return h('div', { className: 'harp-table' }, h('table', { 'aria-label': label },
+  return h('div', { className: 'harp-table-scroll' }, h('table', { className: 'harp-table', 'aria-label': label },
     h('thead', null, h('tr', null, ...headings.map(text => h('th', { key: text, scope: 'col' }, text)))),
     h('tbody', null, ...rows.map(({ key, cells }) => h('tr', { key }, ...cells.map((cell, index) =>
       h(index ? 'td' : 'th', { key: headings[index], scope: index ? undefined : 'row' }, cell)))))))
 }
 
-function Panel({ title, children }) {
-  return h('section', { className: 'harp-panel' }, h('h2', null, title), children)
+function Section({ title, children }) {
+  return h('section', null, h('h2', { className: 'harp-section' }, title), children)
 }
 
 function QueryState({ query, label }) {
-  if (query.isPending) return h('p', { role: 'status' }, `Loading ${label}…`)
-  if (query.isError) return h('p', { role: 'alert' }, `Could not load ${label}. Check the HARP backend or reopen Desktop.`)
+  if (query.isPending) return h('div', { className: 'harp-empty', role: 'status' }, `Loading ${label}…`)
+  if (query.isError) return h('div', { className: 'harp-banner', role: 'alert' }, `Could not load ${label}. Check the HARP backend or reopen Desktop.`)
   return null
+}
+
+function Meter({ percent, label }) {
+  if (!Number.isFinite(percent)) return h('span', { className: 'harp-muted' }, 'No reading')
+  const safe = Math.max(0, Math.min(100, percent))
+  return h('div', { className: 'harp-quota', 'aria-label': `${label}: ${number.format(percent)}% used` },
+    h('span', { className: `harp-bar${safe >= 90 ? ' bad' : safe >= 75 ? ' warn' : ''}`, 'aria-hidden': true },
+      h('i', { style: { width: `${safe}%` } })),
+    h('span', null, `${number.format(percent)}%`))
+}
+
+function SummaryCard({ title, value, detail, percent }) {
+  return h('div', { className: 'harp-card' },
+    h('div', { className: 'harp-card-k' }, title),
+    h('div', { className: 'harp-card-v' }, value),
+    Number.isFinite(percent) && h('span', { className: `harp-bar${percent >= 90 ? ' bad' : percent >= 75 ? ' warn' : ''}`, 'aria-hidden': true },
+      h('i', { style: { width: `${Math.max(0, Math.min(100, percent))}%` } })),
+    h('div', { className: 'harp-card-s' }, detail))
 }
 
 function Diagram() {
@@ -54,30 +94,52 @@ function Diagram() {
     ['Hermes sends the request', 'Hermes handles retries and configured fallback routes.'],
     ['HARP records tagged usage', 'Successful main requests contribute reported token counts; unknown accounts stay Unassigned.']
   ]
-  return h(Panel, { title: 'Request flow' }, h('ol', { className: 'harp-flow' },
-    ...steps.map(([title, detail]) => h('li', { key: title }, h('strong', null, title), h('p', { className: 'harp-muted' }, detail)))))
+  return h(Section, { title: 'REQUEST FLOW' }, h('ol', { className: 'harp-flow' },
+    ...steps.map(([title, detail], index) => h('li', { key: title }, h('b', null, index + 1),
+      h('div', null, h('strong', null, title), h('p', null, detail))))))
 }
 
-function Accounts({ provider, query }) {
+function Accounts({ query }) {
   const data = query.data
-  return h('div', { className: 'harp-panels' },
-    h(Panel, { title: 'Account Pool' }, h(QueryState, { query, label: 'accounts' }),
-      data && (data.accounts.length
-        ? h(Table, { label: 'Pool accounts', headings: ['Account', 'Status'], rows: data.accounts.map((row, index) => ({ key: index, cells: [row.label, row.status] })) })
-        : h('p', { className: 'harp-muted' }, `No ${providers[provider]} accounts configured.`))),
-    h(Panel, { title: 'Provider quota' }, h('p', { className: 'harp-muted' }, 'Hermes usage for the active profile; not per-account.'),
-      data && (data.windows.length
-        ? h(Table, { label: 'Provider quota', headings: ['Window', 'Used', 'Resets'], rows: data.windows.map((row, index) => ({
-            key: index, cells: [row.label || '—', Number.isFinite(row.used_percent) ? `${number.format(row.used_percent)}%` : '—', row.reset_at ? new Date(row.reset_at).toLocaleString() : '—']
+  return h('div', null,
+    h(QueryState, { query, label: 'accounts and quota' }),
+    data && h('div', null,
+      h('div', { className: 'harp-cards' },
+        h(SummaryCard, { title: 'Pool accounts', value: number.format(data.accounts.length), detail: 'recorded by Hermes' }),
+        h(SummaryCard, { title: 'Status OK', value: number.format(data.accounts.filter(row => row.status === 'ok').length), detail: 'as recorded by the pool' }),
+        ...[0, 1].map(index => {
+          const row = data.windows[index]
+          return h(SummaryCard, {
+            key: index, title: row?.label || 'Quota window',
+            value: Number.isFinite(row?.used_percent) ? `${number.format(row.used_percent)}%` : '—',
+            detail: row?.reset_at ? `Resets ${new Date(row.reset_at).toLocaleString()}` : 'No reading',
+            percent: row?.used_percent
+          })
+        })),
+      h(Section, { title: 'POOL ACCOUNTS' }, data.accounts.length
+        ? h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Recorded status'], rows: data.accounts.map((row, index) => ({
+            key: index, cells: [index + 1,
+              h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${row.status === 'ok' ? '' : ' off'}`, 'aria-hidden': true }), row.label),
+              h('span', { className: 'harp-status' }, row.status)]
           })) })
-        : h('p', { className: 'harp-muted' }, 'No provider quota reading available.'))))
+        : h('div', { className: 'harp-empty' }, 'No accounts configured for this provider.')),
+      h(Section, { title: 'PROVIDER QUOTA' },
+        h('div', { className: 'harp-muted' }, 'Hermes usage for the active profile, not for individual pool accounts.'),
+        data.windows.length
+          ? h(Table, { label: 'Provider quota', headings: ['Window', 'Used', 'Resets'], rows: data.windows.map((row, index) => ({
+              key: index, cells: [row.label || '—', h(Meter, { percent: row.used_percent, label: row.label || 'Quota window' }), row.reset_at ? new Date(row.reset_at).toLocaleString() : '—']
+            })) })
+          : h('div', { className: 'harp-empty' }, 'No provider quota reading available.'))))
 }
 
 function Budget({ account }) {
   if (account.quota_tokens == null) return 'No budget set'
   const limit = account.quota_tokens
-  return h('div', null, h('span', null, `${number.format(account.tokens)} / ${number.format(limit)}`),
-    h('progress', { value: Math.min(account.tokens, limit), max: limit, 'aria-label': `Daily token budget for ${account.account}` }),
+  const percent = account.tokens / limit * 100
+  return h('div', { className: 'harp-quota', 'aria-label': `Daily token budget for ${account.account}: ${number.format(account.tokens)} of ${number.format(limit)}` },
+    h('span', { className: `harp-bar${percent >= 100 ? ' bad' : percent >= 75 ? ' warn' : ''}`, 'aria-hidden': true },
+      h('i', { style: { width: `${Math.max(0, Math.min(100, percent))}%` } })),
+    h('span', null, `${number.format(account.tokens)} / ${number.format(limit)}`),
     account.tokens > limit && h('span', null, 'Over budget'))
 }
 
@@ -86,26 +148,28 @@ function Usage({ query, tag, setTag }) {
   const tags = data ? [...new Set(data.usage.map(row => row.tag))].sort() : []
   const selectedTag = tags.includes(tag) ? tag : ''
   const usage = data ? data.usage.filter(row => !selectedTag || row.tag === selectedTag) : []
-  return h('div', { className: 'harp-wrap' },
+  return h('div', null,
     h(QueryState, { query, label: 'usage' }),
-    data && !data.configured && h(Panel, { title: 'Usage collection is off' },
-      h('p', { className: 'harp-muted' }, 'HARP_CONFIG and daily_token_quotas are required for local daily budgets and tagged usage. Accounts above remain available.')),
-    data && data.configured && h('div', { className: 'harp-wrap' },
-      h('p', { className: 'harp-muted' }, `Local daily budgets · ${data.day} UTC · Monitoring only, not provider limits`),
-      h(Panel, { title: 'HARP daily budgets' }, data.accounts.length
-        ? h(Table, { label: 'Daily budgets', headings: ['Account', 'Used tokens', 'Daily budget', 'Requests', 'Unmetered'], rows: data.accounts.map(row => ({
-            key: row.account, cells: [row.account, number.format(row.tokens), h(Budget, { account: row }), number.format(row.requests), number.format(row.unmetered)]
-          })) })
-        : h('p', { className: 'harp-muted' }, 'No budgets or usage recorded.')),
-      h(Panel, { title: 'Usage by tag' },
-        h('label', null, 'Tag ', h('select', { value: selectedTag, onChange: event => setTag(event.target.value) },
+    data && !data.configured && h('div', { className: 'harp-banner' },
+      h(Codicon, { name: 'info', size: '0.8rem' }),
+      h('span', null, 'Local usage collection is off. HARP_CONFIG and daily_token_quotas are needed for budgets and tags.')),
+    data && data.configured && h('div', null,
+      h(Section, { title: 'DAILY BUDGETS' },
+        h('span', { className: 'harp-muted' }, `Local monitoring · ${data.day} UTC · Not a provider limit`),
+        data.accounts.length
+          ? h(Table, { label: 'Daily budgets', headings: ['Account', 'Used tokens', 'Daily budget', 'Requests', 'Unmetered'], rows: data.accounts.map(row => ({
+              key: row.account, cells: [row.account, number.format(row.tokens), h(Budget, { account: row }), number.format(row.requests), number.format(row.unmetered)]
+            })) })
+          : h('div', { className: 'harp-empty' }, 'No budgets or usage recorded.')),
+      h(Section, { title: 'USAGE BY TAG' },
+        h('label', { className: 'harp-muted' }, 'Tag ', h('select', { className: 'harp-select', value: selectedTag, onChange: event => setTag(event.target.value) },
           h('option', { value: '' }, 'All tags'), ...tags.map(value => h('option', { key: value, value }, value)))),
         usage.length
           ? h(Table, { label: 'Tagged usage', headings: ['Tag', 'Account', 'Provider', 'Model', 'Tokens', 'Requests', 'Unmetered'], rows: usage.map(row => ({
               key: JSON.stringify([row.tag, row.account, row.provider, row.model]),
               cells: [row.tag, row.account, row.provider, row.model, number.format(row.tokens), number.format(row.requests), number.format(row.unmetered)]
             })) })
-          : h('p', { className: 'harp-muted' }, 'No usage recorded for this UTC day.'))))
+          : h('div', { className: 'harp-empty' }, 'No usage recorded for this UTC day.'))))
 }
 
 function HarpPage() {
@@ -114,19 +178,21 @@ function HarpPage() {
   const [tag, setTag] = useState('')
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
   const usage = useQuery({ queryKey: [ID, 'usage'], queryFn: () => rest('/usage'), refetchInterval: 60000 })
-  return h('main', { className: 'harp-desktop' }, h('div', { className: 'harp-wrap' },
-    h('header', { className: 'harp-head' }, h('div', null, h('h1', null, 'HARP'),
-      h('p', { className: 'harp-muted' }, 'Accounts, provider quota and local usage')), h('button', {
-      type: 'button', disabled: accounts.isFetching || usage.isFetching,
-      onClick: () => { accounts.refetch(); usage.refetch() }
-    }, 'Refresh')),
-    h('nav', { className: 'harp-row', 'aria-label': 'HARP views' },
-      h('div', { className: 'harp-row' }, ...[['usage', 'Accounts & usage'], ['diagram', 'Diagram']].map(([value, label]) =>
-        h('button', { key: value, type: 'button', 'aria-pressed': view === value, onClick: () => setView(value) }, label)))),
-    view === 'diagram' ? h(Diagram) : h('div', { className: 'harp-wrap' },
-      h('label', null, 'Provider ', h('select', { value: provider, onChange: event => setProvider(event.target.value) },
-        ...Object.entries(providers).map(([value, label]) => h('option', { key: value, value }, label)))),
-      h(Accounts, { provider, query: accounts }), h(Usage, { query: usage, tag, setTag }))))
+  return h('main', { className: 'harp-page' },
+    h('header', { className: 'harp-head' },
+      h('h1', { className: 'harp-title' }, 'HARP'),
+      accounts.data && h('span', { className: 'harp-pill' }, accounts.data.accounts.length),
+      h(SegmentedControl, { options: [
+        { id: 'anthropic', label: 'anthropic' }, { id: 'jev', label: 'jev' }, { id: 'openai-codex', label: 'openai-codex' }
+      ], value: provider, onChange: setProvider }),
+      h('span', { className: 'harp-grow' }),
+      h(Button, { size: 'sm', variant: 'ghost', disabled: accounts.isFetching || usage.isFetching,
+        onClick: () => { accounts.refetch(); usage.refetch() } }, h(Codicon, { name: 'refresh', size: '0.8rem' }), 'Refresh')),
+    h('div', { className: 'harp-sub' },
+      h(SegmentedControl, { options: [{ id: 'usage', label: 'Accounts & usage' }, { id: 'diagram', label: 'Diagram' }], value: view, onChange: setView }),
+      h('span', null, 'Read-only · provider quota is not per-account · budgets are local monitoring')),
+    h('div', { className: 'harp-body' }, view === 'diagram' ? h(Diagram) : h('div', null,
+      h(Accounts, { query: accounts }), h(Usage, { query: usage, tag, setTag }))))
 }
 
 export default {

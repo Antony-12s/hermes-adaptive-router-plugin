@@ -12,7 +12,7 @@ function fixture(usage) {
   const slots = ['anthropic', 'usage', '']
   let index = 0
   const results = [
-    { data: { accounts: [{ label: 'Personal', status: 'active' }], windows: [{ label: '5h', used_percent: 25, reset_at: null }] }, refetch() {} },
+    { data: { accounts: [{ label: 'Personal', status: 'ok' }], windows: [{ label: '5h', used_percent: 25, reset_at: null }] }, refetch() {} },
     { data: usage, refetch() {} }
   ]
   const sandbox = {
@@ -21,6 +21,10 @@ function fixture(usage) {
     },
     host: { navigate: path => requests.push(path) },
     PALETTE_AREA: 'palette', ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar',
+    Button: ({ children, ...props }) => ({ type: 'button', props, children }),
+    Codicon: () => null,
+    SegmentedControl: ({ options, value, onChange }) => ({ type: 'div', props: { role: 'group' },
+      children: options.map(option => ({ type: 'button', props: { onClick: () => onChange(option.id), 'aria-pressed': value === option.id }, children: [option.label] })) }),
     useQuery: options => { requests.push(options); return options.queryKey[1] === 'usage' ? results[1] : results[0] },
     useState: initial => { const slot = index++; return [slots[slot] ?? initial, value => { slots[slot] = value }] },
     h: (type, props, ...children) => ({ type, props: props || {}, children }),
@@ -59,8 +63,12 @@ test('registers one Desktop page, sidebar entry and palette navigation', () => {
   app.registrations[2].data.run()
   assert.equal(app.requests.at(-1), '/harp')
   const page = app.render()
-  assert.match(app.text(page), /Usage collection is off/)
+  assert.match(app.text(page), /Local usage collection is off/)
   assert.match(app.text(page), /Personal/)
+  assert.equal(app.nodes(page, node => node.props?.className === 'harp-card').length, 4)
+  assert.match(app.text(page), /Status OK/)
+  assert.equal(app.nodes(page, node => node.props?.className === 'harp-dot').length, 1)
+  assert.equal(app.nodes(page, node => node.props?.['aria-label'] === '5h: 25% used').length, 1)
 })
 
 test('filters tagged usage, shows budgets, switches provider without losing query scope', () => {
@@ -71,14 +79,14 @@ test('filters tagged usage, shows budgets, switches provider without losing quer
     { tag: 'dev', account: 'work', provider: 'anthropic', model: 'main', tokens: 10, requests: 1, unmetered: 0 }
   ] })
   let page = app.render()
-  assert.equal(app.nodes(page, n => n.type === 'progress')[0].props['aria-label'], 'Daily token budget for work')
+  assert.match(app.nodes(page, n => n.props?.['aria-label']?.startsWith('Daily token budget for work'))[0].props['aria-label'], /20 of 100/)
   assert.match(app.text(page), /fast/)
-  const selects = app.nodes(page, n => n.type === 'select')
-  selects[1].props.onChange({ target: { value: 'qa' } })
+  const tagSelect = app.nodes(page, n => n.type === 'select')[0]
+  tagSelect.props.onChange({ target: { value: 'qa' } })
   page = app.render()
   assert.match(app.text(page), /fast/)
   assert.doesNotMatch(app.text(page), /main/)
-  app.nodes(page, n => n.type === 'select')[0].props.onChange({ target: { value: 'jev' } })
+  app.nodes(page, n => n.type === 'button' && n.children.includes('jev'))[0].props.onClick()
   app.render()
   assert.equal(app.requests.findLast(x => x?.queryKey?.[1] === 'accounts').queryKey[2], 'jev')
   assert.equal(app.requests.findLast(x => x?.queryKey?.[1] === 'usage').queryKey.length, 2)
