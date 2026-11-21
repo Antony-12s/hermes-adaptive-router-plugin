@@ -12,6 +12,8 @@ let openExternal
 const post = (path, body) => rest(path, { method: 'POST', body, timeoutMs: 180000 })
 const notify = (kind, message) => host.notify?.({ kind, message })
 const failure = error => error?.message || String(error)
+const LIVE_MAX_AGE = 300
+const liveRequested = {}
 
 // Match the density, surfaces, and controls of the Accounts desktop page.
 const CSS = `
@@ -134,41 +136,62 @@ function AccountState({ row }) {
   return h('span', { className: 'harp-status' }, parts.join(' · '))
 }
 
+const SESSION = /session|5\s*h|hour/i
+const WEEK = /week/i
+
+function pickWindow(row, pattern, fallback) {
+  const windows = row.usage?.windows || []
+  return windows.find(w => pattern.test(w.label || '')) || windows[fallback] || null
+}
+
+function resetText(iso) {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function WindowCell({ row, window, name }) {
+  if (!row.usage) return h('span', { className: 'harp-muted' }, 'Not read yet')
+  if (!window) return h('span', { className: 'harp-muted' }, '—')
+  return h(Meter, { percent: window.used_percent, label: `${row.label} ${name}` })
+}
+
 function Accounts({ query, canAct = false, onAction = () => {} }) {
   const data = query.data
+  const rows = data?.accounts || []
+  const readable = rows.filter(row => row.usage)
+  const top = (pattern, fallback) => readable.reduce((best, row) => {
+    const value = pickWindow(row, pattern, fallback)?.used_percent
+    return Number.isFinite(value) && (!best || value > best.value) ? { value, label: row.label } : best
+  }, null)
+  const topSession = top(SESSION, 0)
+  const topWeek = top(WEEK, 1)
+  const inRotation = rows.filter(row => row.status === 'ok' && !row.parked).length
+  const tokens = rows.reduce((sum, row) => sum + (row.tokens_24h || 0), 0)
   return h('div', null,
     h(QueryState, { query, label: 'accounts and quota' }),
     data && h('div', null,
       h('div', { className: 'harp-cards' },
-        h(SummaryCard, { title: 'Pool accounts', value: number.format(data.accounts.length), detail: 'recorded by Hermes' }),
-        h(SummaryCard, { title: 'Status OK', value: number.format(data.accounts.filter(row => row.status === 'ok').length), detail: 'as recorded by the pool' }),
-        ...[0, 1].map(index => {
-          const row = data.windows[index]
-          return h(SummaryCard, {
-            key: index, title: row?.label || 'Quota window',
-            value: Number.isFinite(row?.used_percent) ? `${number.format(row.used_percent)}%` : '—',
-            detail: row?.reset_at ? `Resets ${new Date(row.reset_at).toLocaleString()}` : 'No reading',
-            percent: row?.used_percent
-          })
-        })),
+        h(SummaryCard, { title: 'In rotation', value: `${inRotation} / ${rows.length}`, detail: inRotation === rows.length ? 'all usable' : `${rows.length - inRotation} parked or blocked` }),
+        h(SummaryCard, { title: 'Highest session', value: topSession ? `${number.format(topSession.value)}%` : '–', detail: topSession ? topSession.label : 'read live usage', percent: topSession?.value }),
+        h(SummaryCard, { title: 'Highest week', value: topWeek ? `${number.format(topWeek.value)}%` : '–', detail: topWeek ? topWeek.label : 'read live usage', percent: topWeek?.value }),
+        h(SummaryCard, { title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–', detail: tokens ? 'counted by HARP' : 'counting starts with the next request' })),
       h(Section, { title: 'POOL ACCOUNTS' }, data.accounts.length
-        ? h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Live usage', 'Tokens, 24 h', 'Used by', 'State', ''], rows: data.accounts.map((row, index) => ({
-            key: row.id || index, cells: [index + 1,
+        ? h(Table, { label: 'Pool accounts', headings: ['#', 'Account', 'Session', 'Week', 'Resets', 'Tokens, 24 h', 'Used by', 'State', ''], rows: data.accounts.map((row, index) => {
+            const session = pickWindow(row, SESSION, 0)
+            const week = pickWindow(row, WEEK, 1)
+            return { key: row.id || index, cells: [index + 1,
               h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${row.status === 'ok' && !row.parked ? '' : ' off'}`, 'aria-hidden': true }), row.label),
-              row.usage ? h(Meter, { percent: row.usage.peak, label: `${row.label} live usage` }) : h('span', { className: 'harp-muted' }, 'Not read yet'),
+              h(WindowCell, { row, window: session, name: 'session' }),
+              h(WindowCell, { row, window: week, name: 'week' }),
+              h('span', { className: 'harp-status' }, row.usage ? [
+                session?.reset_at ? `Session ${resetText(session.reset_at)}` : 'Session not running',
+                week?.reset_at ? `Week ${resetText(week.reset_at)}` : null].filter(Boolean).join(' · ') : '—'),
               h('span', { className: 'harp-num' }, row.tokens_24h ? compact.format(row.tokens_24h) : '–'),
               h('span', { className: 'harp-status' }, row.used_by?.length ? row.used_by.join(', ') : 'idle'),
               h(AccountState, { row }),
-              h(RowActions, { row, canAct, onAction })]
-          })) })
-        : h('div', { className: 'harp-empty' }, 'No accounts configured for this provider.')),
-      h(Section, { title: 'PROVIDER QUOTA' },
-        h('div', { className: 'harp-muted' }, 'Hermes usage for the active profile, not for individual pool accounts.'),
-        data.windows.length
-          ? h(Table, { label: 'Provider quota', headings: ['Window', 'Used', 'Resets'], rows: data.windows.map((row, index) => ({
-              key: index, cells: [row.label || '—', h(Meter, { percent: row.used_percent, label: row.label || 'Quota window' }), row.reset_at ? new Date(row.reset_at).toLocaleString() : '—']
-            })) })
-          : h('div', { className: 'harp-empty' }, 'No provider quota reading available.'))))
+              h(RowActions, { row, canAct, onAction })] }
+          }) })
+        : h('div', { className: 'harp-empty' }, 'No accounts configured for this provider.'))))
 }
 
 function Budget({ account }) {
@@ -332,6 +355,14 @@ function HarpPage() {
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
   const usage = useQuery({ queryKey: [ID, 'usage'], queryFn: () => rest('/usage'), refetchInterval: 60000 })
   const canAct = ACTION_PROVIDERS.includes(provider)
+  const liveAt = accounts.data?.live_read_at
+  useEffect(() => {
+    // Fill each row's session and week bars without a click: a read-only usage read, at most every 5 minutes.
+    if (!canAct || !accounts.data || (liveAt && Date.now() / 1000 - liveAt < LIVE_MAX_AGE)) return
+    if (Date.now() - (liveRequested[provider] || 0) < LIVE_MAX_AGE * 1000) return
+    liveRequested[provider] = Date.now()
+    post('/pool/live', { provider }).then(() => accounts.refetch(), () => {})
+  }, [provider, canAct, !!accounts.data, liveAt])
   const run = async (name, path, body, report) => {
     setBusy(name)
     try { report(await post(path, body)); setDialog(null); setTarget(null); accounts.refetch() }

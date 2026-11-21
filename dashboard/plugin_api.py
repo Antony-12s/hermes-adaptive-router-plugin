@@ -135,20 +135,7 @@ def get_accounts(provider: str):
                             key=lambda e: e.get("priority") if isinstance(e.get("priority"), int) else 10**6)
     ]
 
-    windows = []
-    if provider in {"anthropic", "openai-codex"}:
-        from agent.account_usage import fetch_account_usage
-
-        snapshot = fetch_account_usage(provider, read_only=True)
-        if snapshot:
-            for window in snapshot.windows:
-                percent = window.used_percent
-                windows.append({
-                    "label": window.label,
-                    "used_percent": percent if percent is not None and math.isfinite(percent) else None,
-                    "reset_at": window.reset_at.isoformat() if window.reset_at else None,
-                })
-    return {"accounts": accounts, "windows": windows, "live_read_at": live.get("read_at"),
+    return {"accounts": accounts, "live_read_at": live.get("read_at"),
             "timer": bool(schedules) and timer.installed()}
 
 

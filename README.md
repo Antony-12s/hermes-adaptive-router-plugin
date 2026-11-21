@@ -72,7 +72,8 @@ config holds aggregate counts and labels, with no credentials or chat text.
 
 The optional `desktop/plugin.js` adds a **HARP** sidebar page to Hermes Desktop.
 It reads the same authenticated `/accounts` and `/usage` endpoints as the web
-Dashboard and includes the request-flow diagram. Its toolbar has HARP-owned
+Dashboard and includes the request-flow diagram. Each account row shows its own
+session and week quota, 24 h tokens and active sessions. Its toolbar has HARP-owned
 account actions for Anthropic and OpenAI Codex pools: **Live usage** (reads each
 credential's usage), **Wake** (Anthropic only; one 1-token request to idle
 accounts), **Balance now** (benches accounts at 90% or more and orders the pool by

@@ -12,7 +12,10 @@ function fixture(usage) {
   const slots = ['anthropic', 'usage', '']
   let index = 0
   const results = [
-    { data: { accounts: [{ id: 'acc-1', label: 'Personal', status: 'ok', usage: { peak: 40, windows: [] }, tokens_24h: 32500000, used_by: [] }], windows: [{ label: '5h', used_percent: 25, reset_at: null }] }, refetch() {} },
+    { data: { accounts: [{ id: 'acc-1', label: 'Personal', status: 'ok', tokens_24h: 32500000, used_by: [], usage: { peak: 68, windows: [
+      { label: 'Current session', used_percent: 0, reset_at: null },
+      { label: 'Current week', used_percent: 68, reset_at: '2026-11-24T06:00:00+07:00' }] } }],
+      windows: [{ label: '5h', used_percent: 25, reset_at: null }], live_read_at: 1 }, refetch() {} },
     { data: usage, refetch() {} }
   ]
   const pass = type => ({ children, ...props }) => ({ type, props, children: children || [] })
@@ -87,7 +90,7 @@ test('live usage reads the pool through HARP backend', async () => {
   const app = fixture({ configured: false, usage: [] })
   await button(app, app.render(), 'Live usage').props.onClick()
   assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/pool/live').body)), { provider: 'anthropic' })
-  assert.equal(app.nodes(app.render(), n => n.props?.['aria-label'] === 'Personal live usage: 40% used').length, 1)
+  assert.equal(app.nodes(app.render(), n => n.props?.['aria-label'] === 'Personal week: 68% used').length, 1)
 })
 
 test('wake sends only the accounts picked after confirmation', async () => {
@@ -151,10 +154,17 @@ test('registers one Desktop page, sidebar entry and palette navigation', () => {
   const page = app.render()
   assert.match(app.text(page), /Local usage collection is off/)
   assert.match(app.text(page), /Personal/)
-  assert.equal(app.nodes(page, node => node.props?.className === 'harp-card').length, 4)
-  assert.match(app.text(page), /Status OK/)
   assert.equal(app.nodes(page, node => node.props?.className === 'harp-dot').length, 1)
-  assert.equal(app.nodes(page, node => node.props?.['aria-label'] === '5h: 25% used').length, 1)
+})
+
+test('each account row carries its own session and week quota; no separate provider table', () => {
+  const app = fixture({ configured: false, usage: [] })
+  const page = app.render()
+  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal session: 0% used').length, 1)
+  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal week: 68% used').length, 1)
+  assert.match(app.text(page), /Resets/)
+  assert.doesNotMatch(app.text(page), /PROVIDER QUOTA/)
+  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === '5h: 25% used').length, 0)
 })
 
 test('filters tagged usage, shows budgets, switches provider without losing query scope', () => {
