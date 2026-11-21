@@ -485,7 +485,7 @@ function ActivityHeat() {
   const top = Math.max(0, ...days.flatMap(day => day.tokens))
   return h(Section, { title: 'ACTIVITY' },
     h('div', { className: 'harp-tools' }, h('span', { className: 'harp-grow' }),
-      h(SegmentedControl, { options: [{ id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }], value: span, onChange: setSpan })),
+      h(SegmentedControl, { options: [{ id: 'day', label: '24 h' }, { id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }], value: span, onChange: setSpan })),
     h(QueryState, { query, label: 'activity' }),
     days.length ? h('div', { className: 'harp-heat' },
       h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),

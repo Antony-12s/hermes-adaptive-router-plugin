@@ -631,7 +631,9 @@ def get_activity(provider: str, hours: float = 24):
 @router.get("/activity/heat")
 def get_activity_heat(span: str = "week"):
     """Tokens-by-hour grid across every configured provider, for the Summary tab."""
-    days = 30 if span == "month" else 7
+    days = {"day": 1, "week": 7, "month": 30}.get(span)
+    if days is None:
+        raise HTTPException(400, "span must be day, week or month.")
     return {"span": span, "days": pool_state.combined_chart(_db(), list(ROUTER_PROVIDERS) + ["jev"], days)}
 
 

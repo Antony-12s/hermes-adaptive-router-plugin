@@ -382,7 +382,7 @@ test('clock times are 24-hour', () => {
 
 
 function heatData(span = 'week') {
-  const days = span === 'month' ? 30 : 7
+  const days = span === 'month' ? 30 : span === 'day' ? 1 : 7
   return { span, days: Array.from({ length: days }, (_, i) => ({
     date: `11-${String(i + 1).padStart(2, '0')}`, dow: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i % 7],
     tokens: Array.from({ length: 24 }, (_, hr) => (i === days - 1 && hr === 22 ? 7000 : 0)),
@@ -415,6 +415,7 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   app.slots[0] = 'summary'
   let page = app.render()
   assert.match(app.text(page), /ACTIVITY/)
+  assert.ok(button(app, page, '24 h'))
   assert.ok(button(app, page, 'Week'))
   assert.ok(button(app, page, 'Month'))
   const cells = app.nodes(page, n => n.props?.className === 'harp-heat-cell')
@@ -427,4 +428,9 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   button(app, page, 'Month').props.onClick()
   page = app.render()
   assert.equal(app.nodes(page, n => n.props?.className === 'harp-heat-cell').length, 30 * 24)
+
+  app.results.heat = { data: heatData('day'), refetch() {} }
+  button(app, page, '24 h').props.onClick()
+  page = app.render()
+  assert.equal(app.nodes(page, n => n.props?.className === 'harp-heat-cell').length, 24)
 })
