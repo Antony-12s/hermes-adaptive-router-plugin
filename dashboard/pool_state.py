@@ -291,6 +291,21 @@ def _blank_activity():
     return {"tokens_24h": 0, "requests_24h": 0, "price_24h": None, "used_by": []}
 
 
+def combined_chart(db, providers, days, now=None):
+    """Token-by-hour heatmap across every provider, for the Summary tab's Activity grid."""
+    now = time.time() if now is None else now
+    if not providers or not Path(db).is_file():
+        return _chart([], now, days)
+    placeholders = ",".join("?" * len(providers))
+    with closing(_open(db)), _read(db) as con:
+        rows = con.execute(
+            f"SELECT bucket, SUM(tokens), SUM(requests) FROM (SELECT bucket, tokens, requests FROM calls"
+            f" WHERE provider IN ({placeholders}) AND bucket >= ? UNION ALL SELECT bucket, tokens, 0 FROM tokens"
+            f" WHERE provider IN ({placeholders}) AND bucket >= ?) GROUP BY bucket",
+            (*providers, now - days * 86400, *providers, now - days * 86400)).fetchall()
+    return _chart(rows, now, days)
+
+
 def last_seen(db):
     """When the tracker last counted a call, or None."""
     if not Path(db).is_file():
@@ -348,10 +363,10 @@ def report(db, provider, hours, now=None):
                 models=models, sources=sources, sessions=sessions, chart=_chart(week, now), snapshots=len(snaps))
 
 
-def _chart(rows, now):
-    """Seven local days (oldest first), each with 24 hourly token and request totals."""
+def _chart(rows, now, days_back=7):
+    """`days_back` local days (oldest first), each with 24 hourly token and request totals."""
     today = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0)
-    days = [today - timedelta(days=back) for back in range(6, -1, -1)]
+    days = [today - timedelta(days=back) for back in range(days_back - 1, -1, -1)]
     chart = [{"date": d.strftime("%m-%d"), "dow": DAYS[d.weekday()].capitalize(), "tokens": [0] * 24,
               "requests": [0] * 24} for d in days]
     index = {d.date(): i for i, d in enumerate(days)}

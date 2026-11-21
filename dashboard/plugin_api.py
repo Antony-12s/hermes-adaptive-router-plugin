@@ -628,6 +628,13 @@ def get_activity(provider: str, hours: float = 24):
     return {"hours": hours, "events": pool_state.read_events(_db(), provider, time.time() - hours * 3600)}
 
 
+@router.get("/activity/heat")
+def get_activity_heat(span: str = "week"):
+    """Tokens-by-hour grid across every configured provider, for the Summary tab."""
+    days = 30 if span == "month" else 7
+    return {"span": span, "days": pool_state.combined_chart(_db(), list(ROUTER_PROVIDERS) + ["jev"], days)}
+
+
 @router.get("/health")
 def get_health(provider: str):
     """Checks from local state only: no provider call."""

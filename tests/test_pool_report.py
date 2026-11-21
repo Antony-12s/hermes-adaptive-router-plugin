@@ -49,6 +49,19 @@ class ReportTests(unittest.TestCase):
         self.assertEqual([s["session"] for s in report["sessions"]], ["s1"])
 
 
+    def test_combined_chart_sums_providers_and_supports_a_longer_range(self):
+        state.record_call(self.db, "anthropic", "a", "s1", "desktop", 100, NOW - 600, model="opus")
+        state.record_call(self.db, "openai-codex", "c", "s2", "cli", 50, NOW - 600, model="sol")
+        state.record_call(self.db, "anthropic", "a", "s3", "desktop", 10, NOW - 20 * 86400, model="opus")
+        week = state.combined_chart(self.db, ["anthropic", "openai-codex"], 7, NOW)
+        self.assertEqual(len(week), 7)
+        self.assertEqual(sum(sum(d["tokens"]) for d in week), 150)
+        month = state.combined_chart(self.db, ["anthropic", "openai-codex"], 30, NOW)
+        self.assertEqual(len(month), 30)
+        self.assertEqual(sum(sum(d["tokens"]) for d in month), 160)
+        self.assertEqual(state.combined_chart(Path(self.dir.name) / "missing.sqlite3", ["anthropic"], 7, NOW), state.combined_chart(self.db, [], 7, NOW))
+
+
 class EventTests(unittest.TestCase):
     def test_events_newest_first_within_period(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -96,6 +109,8 @@ class HealthTests(unittest.TestCase):
                      "message": "[HARP balance] usage 95% >= 90%", "reset_at": NOW + 60}]
         checks = state.health_checks(self.facts(accounts=accounts))
         self.assertEqual({c["level"] for c in checks}, {"ok"})
+
+
 
 
 class AlertTests(unittest.TestCase):

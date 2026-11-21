@@ -381,11 +381,20 @@ test('clock times are 24-hour', () => {
 })
 
 
+function heatData(span = 'week') {
+  const days = span === 'month' ? 30 : 7
+  return { span, days: Array.from({ length: days }, (_, i) => ({
+    date: `11-${String(i + 1).padStart(2, '0')}`, dow: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i % 7],
+    tokens: Array.from({ length: 24 }, (_, hr) => (i === days - 1 && hr === 22 ? 7000 : 0)),
+    requests: Array.from({ length: 24 }, (_, hr) => (i === days - 1 && hr === 22 ? 3 : 0)) })) }
+}
+
 test('summary shows every provider with what is left, plus the tokens card', () => {
   const app = fixture({ configured: false, usage: [] })
   app.results[0].data.accounts[0].requests_24h = 424
   app.results[0].data.accounts[0].price_24h = 37.82
   app.results.router = { data: routerData(), refetch() {} }
+  app.results.heat = { data: heatData(), refetch() {} }
   app.slots[0] = 'summary'
   const page = app.render()
   const text = app.text(page)
@@ -396,4 +405,26 @@ test('summary shows every provider with what is left, plus the tokens card', () 
   assert.equal(app.nodes(page, n => n.props?.role === 'group' && app.text(n).includes('Activity')).length, 0)
   assert.equal(app.nodes(page, n => n.type === 'button' && n.children.includes('Add account')).length, 0)
   assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal week: 32% left').length, 2)
+})
+
+
+test('activity heat grid sits in Summary with a Week/Month toggle', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.router = { data: routerData(), refetch() {} }
+  app.results.heat = { data: heatData('week'), refetch() {} }
+  app.slots[0] = 'summary'
+  let page = app.render()
+  assert.match(app.text(page), /ACTIVITY/)
+  assert.ok(button(app, page, 'Week'))
+  assert.ok(button(app, page, 'Month'))
+  const cells = app.nodes(page, n => n.props?.className === 'harp-heat-cell')
+  assert.equal(cells.length, 7 * 24)
+  const hot = cells.find(c => c.props.title && c.props.title.includes('7,000 tokens'))
+  assert.ok(hot)
+  assert.match(hot.props.title, /Sat 11-07 22:00/)
+
+  app.results.heat = { data: heatData('month'), refetch() {} }
+  button(app, page, 'Month').props.onClick()
+  page = app.render()
+  assert.equal(app.nodes(page, n => n.props?.className === 'harp-heat-cell').length, 30 * 24)
 })

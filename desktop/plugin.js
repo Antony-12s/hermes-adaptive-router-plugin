@@ -478,6 +478,23 @@ function ProviderSummary({ provider, title, query, now, onOpen }) {
     header)
 }
 
+function ActivityHeat() {
+  const [span, setSpan] = useState('week')
+  const query = useQuery({ queryKey: [ID, 'heat', span], queryFn: () => rest(`/activity/heat?span=${span}`), refetchInterval: 300000 })
+  const days = query.data?.days || []
+  const top = Math.max(0, ...days.flatMap(day => day.tokens))
+  return h(Section, { title: 'ACTIVITY' },
+    h('div', { className: 'harp-tools' }, h('span', { className: 'harp-grow' }),
+      h(SegmentedControl, { options: [{ id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }], value: span, onChange: setSpan })),
+    h(QueryState, { query, label: 'activity' }),
+    days.length ? h('div', { className: 'harp-heat' },
+      h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
+      ...days.flatMap(day => [h('span', { key: `l${day.date}` }, `${day.dow} ${day.date}`),
+        ...day.tokens.map((value, hr) => h('i', { key: `${day.date}-${hr}`, className: 'harp-heat-cell',
+          title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens`,
+          style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))])) : null)
+}
+
 function SummaryView({ onOpen }) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(timer) }, [])
@@ -506,6 +523,7 @@ function SummaryView({ onOpen }) {
       h(SummaryCard, { title: 'Least left', value: lowest ? `${lowest.left}%` : '–', percent: lowest ? 100 - lowest.left : undefined,
         detail: lowest ? `${lowest.label} · ${lowest.kind}${lowest.reset ? ` · ${countdown(lowest.reset, now)}` : ''}` : 'read live usage' }),
       h(SummaryCard, { title: 'Jev', value: jev?.state === 'ok' ? 'ready' : jev?.state || '–', detail: jev?.state === 'ok' ? `${jevTitle} · ${jev.label}` : jevTitle })),
+    h(ActivityHeat),
     ...SUMMARY_PROVIDERS.map(([provider, title], i) => h(ProviderSummary, { key: provider, provider, title, query: queries[i], now, onOpen })))
 }
 
