@@ -1,5 +1,6 @@
 // HARP Desktop page: accounts, live usage, balance, wake and sign-in through HARP's own backend.
 import { Button, Codicon, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, host, Input, PALETTE_AREA, ROUTES_AREA, SegmentedControl, SIDEBAR_NAV_AREA, Switch, useQuery } from '@hermes/plugin-sdk'
+import * as sdk from '@hermes/plugin-sdk'
 import { createElement as h, useEffect, useState } from 'react'
 
 const ID = 'harp'
@@ -54,6 +55,9 @@ const CSS = `
 .harp-status{font-size:.6875rem;color:var(--ui-text-tertiary)}
 .harp-select{background:var(--ui-bg-input);color:var(--ui-text-primary);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:3px 6px;font-size:.75rem}
 .harp-select option{background:var(--ui-bg-card);color:var(--ui-text-primary)}
+.harp-select{background:transparent;color-scheme:dark light}
+.harp-select-trigger{width:auto;min-width:96px}
+.harp-select-wide{width:100%;min-width:0}
 .harp-empty{padding:28px 8px;text-align:center;color:var(--ui-text-tertiary);font-size:.75rem}
 .harp-flow{list-style:none;margin:6px 0;padding:0;max-width:720px}
 .harp-flow li{display:flex;gap:10px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--ui-stroke-tertiary)}
@@ -103,12 +107,30 @@ const CSS = `
 .harp-load{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-top:4px}
 .harp-load>div{border:1px solid var(--ui-stroke-tertiary);border-radius:8px;padding:8px 10px}
 .harp-load>div.hot{border-color:var(--ui-red)}
-.harp-load .acc{display:grid;grid-template-columns:1fr 64px 96px 36px;gap:6px;align-items:center;font-size:.6875rem;margin-top:5px}
+.harp-load .acc{display:grid;grid-template-columns:minmax(0,1fr) 72px 110px;gap:8px;align-items:center;font-size:.6875rem;margin-top:5px}
+.harp-load .acc>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .harp-pick{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:.75rem;margin-top:6px}
 .harp-pick i{font-style:normal;padding:2px 8px;border-radius:10px;border:1px solid var(--ui-stroke-tertiary)}
 .harp-pick i.hit{border-color:var(--ui-accent);background:color-mix(in srgb,var(--ui-accent) 15%,transparent)}
 .harp-pick s{opacity:.6}
 `
+
+// Dropdowns follow the Hermes theme through the SDK Select; a native <select> is the fallback.
+// options: strings or { value, label }. An empty value is allowed (shown as the placeholder).
+const SDK = typeof sdk === 'undefined' ? {} : sdk
+const NONE = '__none__'
+function Pick({ value, options, onChange, label, wide, placeholder }) {
+  const opts = options.map(o => (typeof o === 'string' ? { value: o, label: o } : o))
+  if (SDK.Select && SDK.SelectTrigger && SDK.SelectContent && SDK.SelectItem && SDK.SelectValue) {
+    return h(SDK.Select, { value: value === '' ? NONE : String(value), onValueChange: v => onChange(v === NONE ? '' : v) },
+      h(SDK.SelectTrigger, { size: 'sm', className: `harp-select-trigger${wide ? ' harp-select-wide' : ''}`, 'aria-label': label },
+        h(SDK.SelectValue, { placeholder })),
+      h(SDK.SelectContent, null, opts.map(o => h(SDK.SelectItem, { key: String(o.value), value: o.value === '' ? NONE : String(o.value) }, o.label))))
+  }
+  return h('select', { className: `harp-select${wide ? ' harp-select-wide' : ''}`, value, 'aria-label': label, onChange: e => onChange(e.target.value) },
+    placeholder && value === '' ? h('option', { value: '' }, placeholder) : null,
+    ...opts.map(o => h('option', { key: String(o.value), value: o.value }, o.label)))
+}
 
 function Table({ label, headings, rows }) {
   return h('div', { className: 'harp-table-scroll' }, h('table', { className: 'harp-table', 'aria-label': label },
@@ -214,14 +236,11 @@ function RouterView({ onAddKey }) {
       h('div', { className: 'harp-tools' }, 'Strongest first: when unsure it uses the top one. The description tells Jev and the learner what each is for.'),
       ...s.candidates.map((c, i) => h('div', { className: 'harp-cand', key: candId(c) + i },
         h('span', { className: 'harp-muted' }, i + 1),
-        h('select', { className: 'harp-select', value: c.provider, 'aria-label': `Provider ${i + 1}`,
-          onChange: e => setCand(i, { provider: e.target.value, model: (data.models[e.target.value] || [''])[0] }) },
-          ...Object.keys(ROUTER_LABEL).map(p => h('option', { key: p, value: p }, ROUTER_LABEL[p]))),
-        h('select', { className: 'harp-select', value: c.model, 'aria-label': `Model ${i + 1}`, onChange: e => setCand(i, { model: e.target.value }) },
-          ...[...new Set([c.model, ...(data.models[c.provider] || [])])].map(m => h('option', { key: m, value: m }, m))),
+        h(Pick, { value: c.provider, label: `Provider ${i + 1}`, wide: true, options: Object.keys(ROUTER_LABEL).map(p => ({ value: p, label: ROUTER_LABEL[p] })),
+          onChange: v => setCand(i, { provider: v, model: (data.models[v] || [''])[0] }) }),
+        h(Pick, { value: c.model, label: `Model ${i + 1}`, wide: true, options: [...new Set([c.model, ...(data.models[c.provider] || [])])], onChange: v => setCand(i, { model: v }) }),
         h(Input, { value: c.description || '', placeholder: 'What it is good at', 'aria-label': `Good at ${i + 1}`, onChange: e => setCand(i, { description: e.target.value }) }),
-        h('select', { className: 'harp-select', value: c.cap || 'high', 'aria-label': `Effort ceiling ${i + 1}`, onChange: e => setCand(i, { cap: e.target.value }) },
-          ...['low', 'medium', 'high'].map(v => h('option', { key: v, value: v }, `max ${v}`))),
+        h(Pick, { value: c.cap || 'high', label: `Effort ceiling ${i + 1}`, wide: true, options: ['low', 'medium', 'high'].map(v => ({ value: v, label: `max ${v}` })), onChange: v => setCand(i, { cap: v }) }),
         h('span', { className: 'harp-row-actions' },
           h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Move up ${i + 1}`, disabled: !i, onClick: () => move(i, -1) }, h(Codicon, { name: 'arrow-up', size: '0.8rem' })),
           h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Remove ${i + 1}`, onClick: () => edit({ candidates: s.candidates.filter((_, j) => j !== i) }) }, h(Codicon, { name: 'trash', size: '0.8rem' }))))),
@@ -232,8 +251,7 @@ function RouterView({ onAddKey }) {
       h('span', { className: 'harp-muted' }, { save: ' Small models first, light thinking.', balanced: ' Pick by the task, medium thinking at most.', best: ' Strongest when unsure, full thinking.' }[s.mode])),
     h(Section, { title: 'PROVIDER LOAD' },
       h('div', { className: 'harp-tools' }, 'Set each account\'s plan once. Work moves away from a provider above ',
-        h('select', { className: 'harp-select', value: s.limit, 'aria-label': 'Load limit', onChange: e => edit({ limit: Number(e.target.value) }) },
-          ...[70, 80, 85, 90, 95].map(v => h('option', { key: v, value: v }, `${v}%`)))),
+        h(Pick, { value: String(s.limit), label: 'Load limit', options: [70, 80, 85, 90, 95].map(v => ({ value: String(v), label: `${v}%` })), onChange: v => edit({ limit: Number(v) }) })),
       h('div', { className: 'harp-load' }, ...Object.keys(ROUTER_LABEL).map(provider => {
         const load = data.loads[provider]
         const hot = load && load.used >= s.limit
@@ -241,10 +259,9 @@ function RouterView({ onAddKey }) {
           h('div', { className: 'harp-account' }, h('b', null, ROUTER_LABEL[provider]), h('span', { className: 'harp-grow' }),
             h('span', { className: 'harp-muted' }, !load ? 'no usage read yet' : hot ? `${load.used}% used: near its limit` : `${load.used}% used`)),
           ...(data.accounts[provider] || []).map(a => h('div', { className: 'acc', key: a.id }, h('span', null, a.label),
-            h('select', { className: 'harp-select', value: (s.plans[provider] || {})[a.id] || 'x1', 'aria-label': `Plan: ${a.label}`,
-              onChange: e => edit({ plans: { ...s.plans, [provider]: { ...(s.plans[provider] || {}), [a.id]: e.target.value } } }) },
-              ...['x1', 'x5', 'x20'].map(v => h('option', { key: v, value: v }, v))),
-            h(Meter, { percent: a.peak, label: `${a.label} usage` }), h('span', { className: 'harp-num' }, a.peak == null ? '–' : `${Math.round(a.peak)}%`))))
+            h(Pick, { value: (s.plans[provider] || {})[a.id] || 'x1', label: `Plan: ${a.label}`, wide: true, options: ['x1', 'x5', 'x20'],
+              onChange: v => edit({ plans: { ...s.plans, [provider]: { ...(s.plans[provider] || {}), [a.id]: v } } }) }),
+            h(Meter, { percent: a.peak, label: `${a.label} usage` }))))
       }))),
     h(Section, { title: 'TRY A MESSAGE' },
       h('div', { className: 'harp-tools' },
@@ -270,8 +287,8 @@ function RouterView({ onAddKey }) {
             `${shortId(row.pick)} · ${row.effort}`, row.by === 'jev' ? 'Jev' : 'local', row.current || '–',
             row.feedback ? h('span', { className: 'harp-muted' }, row.feedback === 'ok' ? 'right' : `should be ${shortId(row.feedback)}`)
               : fixing === row.id
-                ? h('select', { className: 'harp-select', 'aria-label': `Correct pick: ${row.text}`, value: '', onChange: e => vote(row, e.target.value) },
-                    h('option', { value: '' }, 'Should be…'), ...s.candidates.filter(c => candId(c) !== row.pick).map(c => h('option', { key: candId(c), value: candId(c) }, shortId(candId(c)))))
+                ? h(Pick, { value: '', placeholder: 'Should be…', label: `Correct pick: ${row.text}`, onChange: v => v && vote(row, v),
+                    options: s.candidates.filter(c => candId(c) !== row.pick).map(c => ({ value: candId(c), label: shortId(candId(c)) })) })
                 : h('span', { className: 'harp-row-actions' },
                     h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Right pick: ${row.text}`, onClick: () => vote(row, '') }, h(Codicon, { name: 'thumbsup', size: '0.8rem' })),
                     h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Wrong pick: ${row.text}`, onClick: () => setFixing(row.id) }, 'Wrong'))] })) })
@@ -409,8 +426,7 @@ function Usage({ query, tag, setTag }) {
             })) })
           : h('div', { className: 'harp-empty' }, 'No budgets or usage recorded.')),
       h(Section, { title: 'USAGE BY TAG' },
-        h('label', { className: 'harp-muted' }, 'Tag ', h('select', { className: 'harp-select', value: selectedTag, onChange: event => setTag(event.target.value) },
-          h('option', { value: '' }, 'All tags'), ...tags.map(value => h('option', { key: value, value }, value)))),
+        h('label', { className: 'harp-muted' }, 'Tag ', h(Pick, { value: selectedTag, label: 'Tag', options: [{ value: '', label: 'All tags' }, ...tags], onChange: setTag })),
         usage.length
           ? h(Table, { label: 'Tagged usage', headings: ['Tag', 'Account', 'Provider', 'Model', 'Tokens', 'Requests', 'Unmetered'], rows: usage.map(row => ({
               key: JSON.stringify([row.tag, row.account, row.provider, row.model]),
