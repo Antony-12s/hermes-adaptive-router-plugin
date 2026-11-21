@@ -833,7 +833,7 @@ function RemoveDialog({ row, busy, onClose, onConfirm }) {
 }
 
 function HarpPage() {
-  const [top, setTop] = useState('anthropic')
+  const [top, setTop] = useState('summary')
   const [view, setView] = useState('usage')
   const [tag, setTag] = useState('')
   const [dialog, setDialog] = useState(null)

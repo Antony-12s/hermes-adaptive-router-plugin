@@ -434,3 +434,14 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   page = app.render()
   assert.equal(app.nodes(page, n => n.props?.className === 'harp-heat-cell').length, 24)
 })
+
+test('HARP opens on Summary', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.router = { data: routerData(), refetch() {} }
+  app.results.heat = { data: heatData(), refetch() {} }
+  app.slots[0] = undefined
+  const page = app.render()
+  const summary = app.nodes(page, n => n.type === 'button' && n.children.includes('Summary'))[0]
+  assert.equal(summary.props['aria-pressed'], true)
+  assert.match(app.text(page), /ACTIVITY/)
+})
