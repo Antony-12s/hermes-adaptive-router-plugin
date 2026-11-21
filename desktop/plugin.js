@@ -85,6 +85,12 @@ const CSS = `
 .harp-heat-wrap{overflow-x:auto;max-width:100%}
 .harp-heat{display:grid;grid-template-columns:72px repeat(24,minmax(0,1fr));gap:2px;font-size:.625rem;color:var(--ui-text-tertiary);margin-top:4px;width:100%;max-width:760px;box-sizing:border-box}
 .harp-heat-cell{height:14px;border-radius:2px;background:var(--ui-bg-quaternary)}
+.harp-gh-wrap{overflow-x:auto;max-width:100%}
+.harp-gh{display:flex;gap:3px;margin-top:4px;width:max-content}
+.harp-gh-rows{display:flex;flex-direction:column;gap:3px;margin-right:4px;font-size:.625rem;color:var(--ui-text-tertiary)}
+.harp-gh-rows span{height:11px;line-height:11px}
+.harp-gh-week{display:flex;flex-direction:column;gap:3px}
+.harp-gh-cell{width:11px;height:11px;border-radius:2px;background:var(--ui-bg-quaternary)}
 .harp-check{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
 .harp-check i{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ui-accent)}
 .harp-check i.warn{background:var(--ui-orange)}
@@ -478,7 +484,38 @@ function ProviderSummary({ provider, title, query, now, onOpen }) {
             h(LeftCell, { row, window: pickWindow(row, WEEK, 1), name: 'week', now }), toks(row), money(row), reqs(row)] })) }))
 }
 
-function ActivityHeat() {
+// GitHub-style grid for Month: one cell per day (weeks as columns, Sun-Sat rows), not 720 hourly cells.
+const GH_ROW_LABELS = { 1: 'Mon', 3: 'Wed', 5: 'Fri' }
+function MonthGrid({ days, now }) {
+  const n = days.length
+  if (!n) return null
+  const dates = days.map((_, i) => new Date(now - (n - 1 - i) * 86400000))
+  const firstDow = dates[0].getDay()
+  const top = Math.max(0, ...days.map(day => day.tokens.reduce((a, b) => a + b, 0)))
+  const weeks = []
+  for (let col = 0; col * 7 - firstDow < n; col++) {
+    const week = []
+    for (let row = 0; row < 7; row++) {
+      const index = col * 7 + row - firstDow
+      week.push(index >= 0 && index < n ? { day: days[index], date: dates[index] } : null)
+    }
+    if (week.every(c => !c)) break
+    weeks.push(week)
+  }
+  const cell = (entry, row) => {
+    if (!entry) return h('i', { key: row, className: 'harp-gh-cell' })
+    const total = entry.day.tokens.reduce((a, b) => a + b, 0)
+    const requests = entry.day.requests.reduce((a, b) => a + b, 0)
+    return h('i', { key: row, className: 'harp-gh-cell',
+      title: `${entry.day.dow} ${entry.day.date} · ${number.format(total)} tokens in ${number.format(requests)} request${requests === 1 ? '' : 's'}`,
+      style: total ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * total / (top || 1))}%, transparent)` } : undefined })
+  }
+  return h('div', { className: 'harp-gh-wrap' }, h('div', { className: 'harp-gh' },
+    h('div', { className: 'harp-gh-rows' }, ...[0, 1, 2, 3, 4, 5, 6].map(row => h('span', { key: row }, GH_ROW_LABELS[row] || ''))),
+    ...weeks.map((week, col) => h('div', { className: 'harp-gh-week', key: col }, ...week.map((entry, row) => cell(entry, row))))))
+}
+
+function ActivityHeat({ now }) {
   const [span, setSpan] = useState('week')
   const query = useQuery({ queryKey: [ID, 'heat', span], queryFn: () => rest(`/activity/heat?span=${span}`), refetchInterval: 300000 })
   const days = query.data?.days || []
@@ -487,12 +524,13 @@ function ActivityHeat() {
     h('div', { className: 'harp-tools' }, h('span', { className: 'harp-grow' }),
       h(SegmentedControl, { options: [{ id: 'day', label: '24 h' }, { id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }], value: span, onChange: setSpan })),
     h(QueryState, { query, label: 'activity' }),
-    days.length ? h('div', { className: 'harp-heat-wrap' }, h('div', { className: 'harp-heat' },
-      h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
-      ...days.flatMap(day => [h('span', { key: `l${day.date}`, title: day.date }, day.dow),
-        ...day.tokens.map((value, hr) => h('i', { key: `${day.date}-${hr}`, className: 'harp-heat-cell',
-          title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens`,
-          style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))]))) : null)
+    !days.length ? null : span === 'month' ? h(MonthGrid, { days, now })
+      : h('div', { className: 'harp-heat-wrap' }, h('div', { className: 'harp-heat' },
+        h('span'), ...Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}` }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
+        ...days.flatMap(day => [h('span', { key: `l${day.date}`, title: day.date }, day.dow),
+          ...day.tokens.map((value, hr) => h('i', { key: `${day.date}-${hr}`, className: 'harp-heat-cell',
+            title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens`,
+            style: value ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * value / (top || 1))}%, transparent)` } : undefined }))]))))
 }
 
 function SummaryView({ onOpen }) {
@@ -523,7 +561,7 @@ function SummaryView({ onOpen }) {
       h(SummaryCard, { title: 'Least left', value: lowest ? `${lowest.left}%` : '–', percent: lowest ? 100 - lowest.left : undefined,
         detail: lowest ? `${lowest.label} · ${lowest.kind}${lowest.reset ? ` · ${countdown(lowest.reset, now)}` : ''}` : 'read live usage' }),
       h(SummaryCard, { title: 'Jev', value: jev?.state === 'ok' ? 'ready' : jev?.state || '–', detail: jev?.state === 'ok' ? `${jevTitle} · ${jev.label}` : jevTitle })),
-    h(ActivityHeat),
+    h(ActivityHeat, { now }),
     ...SUMMARY_PROVIDERS.map(([provider, title], i) => h(ProviderSummary, { key: provider, provider, title, query: queries[i], now, onOpen })))
 }
 
