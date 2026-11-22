@@ -77,6 +77,10 @@ flowchart TD
 
 ### Routing self-improvement
 
+The repository includes an [optional routing dataset and offline training command](training/README.md)
+for coding and general requests in Thai and English. HARP leaves this dataset
+unused during normal operation.
+
 HARP's local learner improves from Jev classifications and your feedback on real
 Hermes requests. In **Diagram → What it learned**, select **Verify result** after
 checking that the proposed model actually handled the task and passed your checks.
