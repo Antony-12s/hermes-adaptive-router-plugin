@@ -85,8 +85,12 @@ Use **Right** or **Wrong** to rate or correct the route directly. HARP can send
 reviewed examples to Jev to guide later classifications.
 
 For recognized short weather lookups, HARP can reuse the verified provider,
-model, and effort across equivalent Thai or English phrasings. The active
-effort limits and provider quota still apply.
+model, and effort across equivalent Thai or English phrasings. Before any
+result has been verified, HARP recommends Anthropic Claude Haiku 5.5 with
+Low effort if that model is configured in **Diagram → Models it can pick**.
+Use the model entry exposed by your Hermes provider. The active effort limits
+and provider quota still apply, and unavailable candidates fall through to
+the normal routing logic.
 
 A successful API response alone does not verify that the task succeeded. HARP
 learns which routes to recommend from these examples. It leaves model weights

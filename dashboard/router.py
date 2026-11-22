@@ -402,9 +402,8 @@ def reusable_route(store, text, settings, loads):
     if not task_group:
         return None
     verified = store.verified_route_for(task_group)
-    if not verified:
-        return None
-    pick, effort = verified
+    # This seed sets a route before the user has verified any weather lookup.
+    pick, effort = verified or ("anthropic:claude-haiku-5-5", "low")
     candidate = next((item for item in settings["candidates"] if candidate_id(item) == pick), None)
     if not candidate or effort not in EFFORTS:
         return None
