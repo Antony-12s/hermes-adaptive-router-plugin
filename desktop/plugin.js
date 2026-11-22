@@ -237,7 +237,11 @@ function QuotaSettings({ onOpen, onWeights }) {
         h(Button, { size: 'sm', onClick: () => onOpen('delegation') }, 'Delegation'),
         h(Button, { size: 'sm', onClick: () => onOpen('diagram') }, 'Diagram')),
       h('label', { className: 'harp-field' }, 'Copy into a new Hermes chat',
-        h('textarea', { readOnly: true, rows: 5, value: 'Review my current HARP settings for Provider weights, Hermes Delegation and Diagram. Ask what outcomes I want, then propose the provider, agent and effort for each work type. Show the settings you would change and wait for my confirmation before saving.' }))))
+        h('textarea', { readOnly: true, rows: 5, value: 'Review my current HARP settings for Provider weights, Hermes Delegation and Diagram. Ask what outcomes I want, then propose the provider, agent and effort for each work type. Show the settings you would change and wait for my confirmation before saving.' }))),
+    h(Section, { title: 'DEBUGGING HANDOFF' },
+      h('div', { className: 'harp-card' },
+        h('p', null, 'If a safety filter stops a step, pause that step and review why it was blocked.'),
+        h('p', null, 'For the work you can continue, check Codex quota. If it is enough to finish, share the relevant diff, test results, and remaining steps with Codex. If quota is low, save that summary for the next session.'))))
 }
 
 function QuotaPane() {
@@ -557,6 +561,11 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
         h('b', { title: { save: 'Small models first, light thinking.', balanced: 'Pick by the task, medium thinking at most.', best: 'Strongest when unsure, full thinking.' }[s.mode] }, 'Focus'),
         h(SegmentedControl, { options: [{ id: 'save', label: 'Save' }, { id: 'balanced', label: 'Balanced' }, { id: 'best', label: 'Best' }],
           value: s.mode, onChange: value => edit({ mode: value }) }),
+        h('label', null, 'Heavyweight',
+          h(Pick, { value: s.candidates.some(c => candId(c) === s.heavyweight) ? s.heavyweight : '', label: 'Heavyweight',
+            options: [{ value: '', label: 'Auto by quota' }, ...s.candidates.map(c => ({
+              value: candId(c), label: `${ROUTER_LABEL[c.provider] || c.provider} · ${c.model}`,
+            }))], onChange: heavyweight => edit({ heavyweight }) })),
         h('label', null, 'Provider load limit',
           h(Pick, { value: String(s.limit), label: 'Load limit', options: [70, 80, 85, 90, 95].map(v => ({ value: String(v), label: `${v}%` })), onChange: v => edit({ limit: Number(v) }) }))),
       h('div', { className: 'harp-load' }, ...Object.keys(ROUTER_LABEL).map(provider => {
@@ -567,7 +576,7 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
             h('span', { className: 'harp-muted' }, !load ? 'no usage read yet' : hot ? `${load.used}% used: near its limit` : `${load.used}% used`)),
           ...(data.accounts[provider] || []).map(a => h('div', { className: 'acc', key: a.id }, h('span', { title: a.label }, a.label),
             h(Pick, { value: (s.plans[provider] || {})[a.id] || 'auto', label: `Plan: ${a.label}`, wide: true,
-              options: [{ value: 'auto', label: `Auto · ${a.weight || 'x1'}` }, 'x1', 'x5', 'x20'],
+              options: [{ value: 'auto', label: `Auto · ${a.weight || 'x1'}` }, 'x1', 'x5', 'x10', 'x20'],
               onChange: v => {
                 const plans = { ...(s.plans[provider] || {}) }
                 if (v === 'auto') delete plans[a.id]
@@ -1203,7 +1212,7 @@ function AlertsView({ provider }) {
   const levelOk = /^\d+$/.test(level) && Number(level) >= 50 && Number(level) <= 100
   return h('div', null,
     h('div', { className: 'harp-tools' }, `The HARP Timer reads every account each 5 minutes while a channel is on, and alerts once when a 5-hour window or weekly limit reaches ${s.threshold}%, once when every account is there, and once when an account needs to sign in again.`),
-    h('div', { className: 'harp-setting' }, h('div', { className: 'harp-grow' }, h('b', null, 'Desktop notifications'), h('span', null, 'Windows notifications on this computer.')),
+    h('div', { className: 'harp-setting' }, h('div', { className: 'harp-grow' }, h('b', null, 'Desktop notifications'), h('span', null, 'Notifications in this computer’s desktop session.')),
       h(Switch, { checked: s.desktop, disabled: busy, 'aria-label': 'Desktop notifications', onCheckedChange: value => save({ desktop: value }) })),
     h('div', { className: 'harp-setting' }, h('div', { className: 'harp-grow' }, h('b', null, 'Telegram'), h('span', null, 'To the Telegram bot\'s home channel through hermes send (send /sethome to the bot first).')),
       h(Switch, { checked: s.telegram, disabled: busy, 'aria-label': 'Telegram alerts', onCheckedChange: value => save({ telegram: value }) })),
@@ -1242,7 +1251,7 @@ function ScheduleDialog({ row, busy, onClose, onSave }) {
     row.schedule && h(Button, { size: 'sm', variant: 'outline', disabled: !!busy, onClick: () => onSave('') }, 'Remove schedule'),
     h(Button, { size: 'sm', 'data-action': 'save-schedule', disabled: !!busy || !every.trim(), onClick: () => onSave(every.trim()) },
       busy ? 'Saving…' : 'Save')) },
-    h('p', null, 'Park this account every week during these hours. HARP checks every 5 minutes with a Windows Task Scheduler task ("HARP Timer"), and returns the account to rotation when the window ends.'),
+    h('p', null, 'Park this account every week during these hours. HARP checks every 5 minutes with the HARP Timer for this operating system, and returns the account to rotation when the window ends.'),
     h('label', { className: 'harp-field' }, 'Days and hours, such as "mon-fri 09:00-17:00" or "sat,sun 22:00-06:00"'),
     h(Input, { value: every, placeholder: 'mon-fri 09:00-17:00', 'aria-label': 'Schedule', onChange: event => setEvery(event.target.value) }))
 }

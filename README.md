@@ -9,7 +9,7 @@ Set `allow_tools` to `true` to route initial text requests that advertise tools
 when both models support the same tool definitions. Requests containing tool
 results or previous tool calls still use Hermes' selected model.
 
-## Configure on Windows
+## Configure on Windows, Linux, or macOS
 
 Use a Hermes Agent release that supports the
 [LLM request middleware API](https://hermes-agent.nousresearch.com/docs/developer-guide/middleware).
@@ -20,6 +20,20 @@ Copy-Item .\harp.example.json .\harp.json
 $env:HARP_CONFIG = (Resolve-Path .\harp.json).Path
 hermes plugins doctor .
 ```
+
+On Linux or macOS:
+
+```sh
+cp harp.example.json harp.json
+export HARP_CONFIG="$(pwd)/harp.json"
+hermes plugins doctor .
+```
+
+HARP uses one plugin package for all three platforms. The optional HARP Timer
+uses Windows Task Scheduler, a Linux systemd user timer, or a macOS LaunchAgent
+in the signed-in desktop session. Linux and macOS need `hermes` on PATH when
+registering the timer. Linux desktop alerts also need `notify-send` and a
+notification service. Telegram alerts use Hermes on all three platforms.
 
 Before running the doctor, replace the placeholder model IDs in `harp.json`
 with actual models available through the same provider. Set `primary_model`
@@ -80,7 +94,7 @@ accounts), **Balance now** (benches accounts at 90% or more and orders the pool 
 usage), and **Add account** (relays `hermes auth add`). Wake and Balance ask for
 confirmation. Below the provider row, Activity lists what HARP changed, Report breaks
 down tokens by account, model, source and session, Health checks the pool and
-the HARP Timer, and Alerts sends Windows or Telegram notifications at a usage
+the HARP Timer, and Alerts sends desktop or Telegram notifications at a usage
 threshold. Local daily budgets are monitoring thresholds, not provider
 limits. The Agent and Desktop
 halves are enabled separately. After installing the package, rescan plugins in

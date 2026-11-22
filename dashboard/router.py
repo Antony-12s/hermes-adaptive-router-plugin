@@ -20,7 +20,7 @@ MODES = {   # effort ceiling, confidence needed before trusting a pick
     "balanced": {"cap": 1, "sure": 0.70},
     "best": {"cap": 2, "sure": 0.85},
 }
-PLANS = {"x1": 1, "x5": 5, "x20": 20}
+PLANS = {"x1": 1, "x5": 5, "x10": 10, "x20": 20}
 ANTHROPIC_DISPLAY_PLANS = ("Pro", "Max", "Max 5x", "Max 20x")
 DIFFICULTY = [
     "Trivial: a greeting, small talk, or a one-line factual answer",
@@ -28,7 +28,7 @@ DIFFICULTY = [
     "Hard: multi-step work, debugging, design, planning or long analysis",
 ]
 DEFAULTS = {
-    "enabled": True, "apply": False, "mode": "balanced", "limit": 85,
+    "enabled": True, "apply": False, "mode": "balanced", "limit": 85, "heavyweight": "",
     "jev_model": "jev-latest", "jev_daily_cap": 300, "plans": {},
     "anthropic_display_plans": {},
     "candidates": [   # strongest first; editable on the Diagram page
@@ -62,6 +62,8 @@ def validate(settings):
         raise ValueError("mode must be save, balanced or best")
     if not (50 <= int(settings["limit"]) <= 100):
         raise ValueError("limit must be 50 to 100")
+    if not isinstance(settings.get("heavyweight", ""), str):
+        raise ValueError("heavyweight must be a candidate ID or empty for Auto")
     seen = set()
     for c in settings["candidates"]:
         if not (isinstance(c, dict) and c.get("provider") and c.get("model")):
@@ -73,7 +75,7 @@ def validate(settings):
         seen.add(candidate_id(c))
     for provider, plans in settings["plans"].items():
         if any(p not in PLANS for p in plans.values()):
-            raise ValueError("plans must be x1, x5 or x20")
+            raise ValueError("plans must be x1, x5, x10 or x20")
     return settings
 
 
@@ -316,11 +318,36 @@ def decide(text, settings, learner, difficulty_learner, loads, jev=None, seeds=0
         level_probs, _ = difficulty_learner.predict(text, ["0", "1", "2"])
         level = sum(int(k) * p for k, p in level_probs.items()) if difficulty_learner.samples else _length_level(text)
         by = "local"
-    hot = lambda cid: (loads.get(by_id[cid]["provider"]) or {}).get("used", 0) >= settings["limit"]
+    def quota(cid):
+        return loads.get(by_id[cid]["provider"]) or {}
+
+    def hot(cid):
+        usage = quota(cid)
+        if usage.get("pool_has_room"):
+            return False
+        return usage.get("pool_near_limit") or usage.get("used", 0) >= settings["limit"]
+
     label = max(probs, key=probs.get)
     unsure = conf < mode["sure"]
     pick = ids[0] if unsure else label
     moved = None
+    alternate = None
+    coding = by_id[pick]["provider"] == "openai-codex" and re.fullmatch(
+        r"(?:gpt-[\w.]+-)?sol", by_id[pick]["model"])
+    if coding:
+        alternate = next((cid for cid in ids if by_id[cid]["provider"] == "anthropic"
+                          and re.fullmatch(r"(?:claude-)?opus(?:-[\w.-]+)?", by_id[cid]["model"])), None)
+    # Only compare interchangeable coding candidates with known capacity.
+    heavyweight = settings.get("heavyweight")
+    hard_work = coding or (not unsure and by_id[pick]["provider"] == "anthropic" and
+                           re.fullmatch(r"(?:claude-)?opus(?:-[\w.-]+)?", by_id[pick]["model"]))
+    if hard_work and heavyweight in by_id and not hot(heavyweight):
+        if heavyweight != pick:
+            moved, pick = pick, heavyweight
+    elif alternate and not hot(alternate):
+        current_left, alternate_left = quota(pick).get("left"), quota(alternate).get("left")
+        if current_left is not None and alternate_left is not None and alternate_left > current_left:
+            moved, pick = pick, alternate
     if hot(pick):
         order = [ids[0]] + [i for i in ids if i != ids[0]] if unsure else sorted(ids, key=lambda i: -probs.get(i, 0))
         cool = next((i for i in order if not hot(i)), None)
@@ -328,6 +355,8 @@ def decide(text, settings, learner, difficulty_learner, loads, jev=None, seeds=0
             moved, pick = pick, cool
     cap = EFFORTS.index(by_id[pick].get("cap", "high"))
     want = round(level) if not unsure else max(1, mode["cap"])
+    if coding:
+        want = max(1, want)
     effort = EFFORTS[max(0, min(want, cap, mode["cap"]))]
     return {"pick": pick, "label": label, "effort": effort, "by": by, "confidence": round(conf, 3),
             "probs": {k: round(v, 3) for k, v in probs.items()}, "difficulty": round(level, 2),

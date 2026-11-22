@@ -493,9 +493,14 @@ test('router edits are saved together', async () => {
   page = app.render()
   app.nodes(page, n => n.type === 'select' && n.props['aria-label'] === 'Plan: Personal')[0].props.onChange({ target: { value: 'x20' } })
   page = app.render()
+  const heavyweight = app.nodes(page, n => n.type === 'select' && n.props['aria-label'] === 'Heavyweight')[0]
+  const choice = app.nodes(heavyweight, n => n.type === 'option' && !!n.props.value)[0].props.value
+  heavyweight.props.onChange({ target: { value: choice } })
+  page = app.render()
   await app.nodes(page, n => n.props?.['data-action'] === 'save-router')[0].props.onClick()
   const body = JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/router/settings').body))
   assert.equal(body.mode, 'best')
+  assert.equal(body.heavyweight, choice)
   assert.equal(body.plans.anthropic.a1, 'x20')
   assert.equal(body.candidates.length, 2)
 })

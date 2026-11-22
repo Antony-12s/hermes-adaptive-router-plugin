@@ -49,6 +49,32 @@ class DecideTests(unittest.TestCase):
         d = router.decide("x", settings(), self.learner, self.levels, loads, jev("openai-codex:sol"))
         self.assertEqual((d["pick"], d["moved_from"]), ("openai-codex:sol", None))
 
+    def test_coding_route_prefers_more_weighted_quota_and_keeps_medium_effort(self):
+        codex = router.provider_load({"c1": 20}, {"c1": "x1"})
+        for weight in ("x5", "x10", "x20"):
+            with self.subTest(weight=weight):
+                anthropic = router.provider_load({"a1": 40, "a2": 92}, {"a1": weight})
+                loads = {"openai-codex": codex, "anthropic": anthropic}
+                d = router.decide("fix crash", settings(), self.learner, self.levels, loads,
+                                  jev("openai-codex:sol", level=0))
+                self.assertEqual((d["pick"], d["effort"]), ("anthropic:opus", "medium"))
+        for anthropic in (None, router.provider_load({"a1": 94}, {"a1": "x20"}),
+                          router.provider_load({"a1": 93, "a2": 48}, {"a1": "x1", "a2": "x1"})):
+            loads = {"openai-codex": codex, "anthropic": anthropic}
+            d = router.decide("fix crash", settings(), self.learner, self.levels, loads,
+                              jev("openai-codex:sol", level=0))
+            self.assertEqual((d["pick"], d["effort"]), ("openai-codex:sol", "medium"))
+
+    def test_manual_heavyweight_pins_coding_route_until_provider_is_hot(self):
+        loads = {"anthropic": {"left": 3, "used": 40}, "openai-codex": {"left": 1, "used": 0}}
+        decision = router.decide("fix crash", settings(heavyweight="openai-codex:sol"),
+                                 self.learner, self.levels, loads, jev("openai-codex:sol"))
+        self.assertEqual(decision["pick"], "openai-codex:sol")
+        loads["anthropic"]["used"] = 95
+        decision = router.decide("fix crash", settings(heavyweight="anthropic:opus"),
+                                 self.learner, self.levels, loads, jev("openai-codex:sol"))
+        self.assertEqual(decision["pick"], "openai-codex:sol")
+
     def test_local_learner_learns_from_labels(self):
         ids = [router.candidate_id(c) for c in CANDS]
         for _ in range(40):

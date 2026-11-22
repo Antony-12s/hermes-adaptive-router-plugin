@@ -139,7 +139,7 @@ def _read_all(provider, pool):
             if provider == "anthropic":
                 for account in eligible:
                     plan = readings.get(account, {}).get("plan", "").casefold().replace("×", "x").replace(" ", "")
-                    for suffix, weight in (("20x", "x20"), ("5x", "x5")):
+                    for suffix, weight in (("20x", "x20"), ("10x", "x10"), ("5x", "x5")):
                         if "max" in plan and suffix in plan:
                             detected[account] = weight
                             break

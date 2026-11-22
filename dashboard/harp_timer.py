@@ -1,16 +1,19 @@
-"""Windows Task Scheduler timer for HARP: `hermes harp tick` every 5 minutes (park schedules, usage history, alerts).
+"""Run HARP tick every five minutes using the per-user OS scheduler."""
 
-Three files in <Hermes home>/harp-timer/ (tick.cmd, tick.vbs, task.xml while registering)
-and one per-user task. No admin rights; the VBS launcher keeps the window hidden.
-"""
-
+import json
 import os
+import plistlib
+import shlex
+import shutil
 import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 TASK_NAME = "HARP Timer"
+UNIT = "harp-tick"
+LABEL = "ai.hermes.harp-tick"
 NO_WINDOW = 0x08000000
 _TOAST = (
     "$ErrorActionPreference='Stop';"
@@ -26,7 +29,12 @@ _TOAST = (
 
 
 def toast(title, body):
-    """A Windows notification through PowerShell; the text travels in the environment, never the command line."""
+    """Show a desktop notification, if the user session supports it."""
+    if sys.platform.startswith("linux"):
+        return _native(["notify-send", "--", title, body])[0] == 0
+    if sys.platform == "darwin":
+        script = "on run argv\n display notification (item 2 of argv) with title (item 1 of argv)\nend run"
+        return _native(["osascript", "-e", script, title, body])[0] == 0
     import base64
 
     powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
@@ -67,6 +75,8 @@ def sender(settings):
 
 def hermes_alias():
     """The per-user app alias survives Hermes updates; the versioned WindowsApps path does not."""
+    if os.name != "nt":
+        return shutil.which("hermes") or "hermes"
     alias = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps" / "hermes.exe"
     return str(alias)
 
@@ -115,14 +125,80 @@ def task_exists(name):
     return os.name == "nt" and _schtasks("/Query", "/TN", name)[0] == 0
 
 
+def _native(command):
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return 1, str(error)
+    return result.returncode, (result.stdout + result.stderr).strip()
+
+
+def _checked(command):
+    code, detail = _native(command)
+    if code:
+        raise RuntimeError(f"Could not configure HARP Timer with {command[0]}: {detail or code}")
+
+
+def _linux_units():
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user"
+
+
+def _mac_agent():
+    return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+
+
+def _mac_domain():
+    return f"gui/{os.getuid()}"
+
+
+def _install_unix(home):
+    executable = shutil.which("hermes")
+    if not executable:
+        raise RuntimeError("Hermes must be on PATH to install the HARP Timer.")
+    home = str(Path(home).resolve())
+    if sys.platform.startswith("linux"):
+        folder = _linux_units()
+        folder.mkdir(parents=True, exist_ok=True)
+        launcher = Path(home) / "harp-timer" / "tick.sh"
+        launcher.parent.mkdir(parents=True, exist_ok=True)
+        launcher.write_text(f"export HERMES_HOME={shlex.quote(home)}\nexec {shlex.quote(executable)} harp tick\n", encoding="utf-8")
+        argument = json.dumps(str(launcher).replace("%", "%%").replace("$", "$$"), ensure_ascii=False)
+        (folder / f"{UNIT}.service").write_text(
+            f"[Service]\nType=oneshot\nExecStart=/bin/sh {argument}\nTimeoutStartSec=10min\n", encoding="utf-8")
+        (folder / f"{UNIT}.timer").write_text(
+            "[Timer]\nOnActiveSec=1min\nOnUnitInactiveSec=5min\n[Install]\nWantedBy=timers.target\n", encoding="utf-8")
+        _checked(["systemctl", "--user", "daemon-reload"])
+        _checked(["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"])
+    elif sys.platform == "darwin":
+        agent = _mac_agent()
+        domain = _mac_domain()
+        if installed():
+            _checked(["launchctl", "bootout", f"{domain}/{LABEL}"])
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_bytes(plistlib.dumps({
+            "Label": LABEL, "ProgramArguments": [executable, "harp", "tick"],
+            "EnvironmentVariables": {"HERMES_HOME": home, "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+            "StartInterval": 300, "RunAtLoad": True,
+        }))
+        _checked(["launchctl", "bootstrap", domain, str(agent)])
+    else:
+        raise RuntimeError("HARP Timer requires Windows, Linux with systemd, or macOS.")
+
+
 def installed():
-    return task_exists(TASK_NAME)
+    if os.name == "nt":
+        return task_exists(TASK_NAME)
+    if sys.platform.startswith("linux"):
+        return _native(["systemctl", "--user", "is-active", "--quiet", f"{UNIT}.timer"])[0] == 0
+    if sys.platform == "darwin":
+        return _native(["launchctl", "print", f"{_mac_domain()}/{LABEL}"])[0] == 0
+    return False
 
 
 def install(home):
     """Write the files and register (or replace) the task. RuntimeError with schtasks' message."""
     if os.name != "nt":
-        raise RuntimeError("The HARP schedule timer is available on Windows only.")
+        return _install_unix(home)
     folder, cmd, vbs = files(home)
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "tick.cmd").write_text(cmd, encoding="utf-8", newline="")
@@ -138,6 +214,20 @@ def install(home):
 
 
 def remove():
+    if sys.platform.startswith("linux"):
+        folder = _linux_units()
+        timer = folder / f"{UNIT}.timer"
+        if timer.exists():
+            _checked(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
+            timer.unlink()
+            (folder / f"{UNIT}.service").unlink(missing_ok=True)
+            _checked(["systemctl", "--user", "daemon-reload"])
+        return
+    if sys.platform == "darwin":
+        if installed():
+            _checked(["launchctl", "bootout", f"{_mac_domain()}/{LABEL}"])
+        _mac_agent().unlink(missing_ok=True)
+        return
     if installed():
         code, out = _schtasks("/Delete", "/F", "/TN", TASK_NAME)
         if code != 0:
