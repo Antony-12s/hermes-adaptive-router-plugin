@@ -98,6 +98,17 @@ python -B -m unittest discover -s tests -v
 ## Router
 
 The Diagram tab routes each new message to a provider, model and effort.
+
+In Hermes Desktop, HARP shows a quota notice under the focused chat composer
+and in the right-hand **HARP quota** pane. A provider needs fresh readings
+showing that its available accounts are near the limit before HARP suggests
+another provider with observed headroom. Account plans still weight the
+provider totals. In Apply mode, Auto-switch is initially on and waits for
+the active turn to finish. Shadow mode starts with Auto-switch off.
+**Switch now** applies the offered model and effort to that chat for its
+next message. **Ignore** dismisses the current provider warning until the
+pool is seen below its limit again. Hermes' own model confirmation still
+applies.
 If a working Type-safe (Jev) API key is in the pool, Jev decides what the
 local learner is not sure about and teaches it; without a key the local
 learner decides on its own for free. Set each account's plan (x1, x5, x20)

@@ -7,10 +7,13 @@ const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'u
   .replace(/^import .*$/gm, '')
   .replace('export default {', 'globalThis.plugin = {')
 
-function fixture(usage) {
+function fixture(usage, session = {}) {
   const requests = []
   const slots = ['anthropic', 'usage', '']
   let index = 0
+  let quotaEvent
+  let busyListener
+  const dispose = []
   const results = [
     { data: { accounts: [{ id: 'acc-1', label: 'Personal', status: 'ok', tokens_24h: 32500000, used_by: [], usage: { peak: 68, windows: [
       { label: 'Current session', used_percent: 0, reset_at: null },
@@ -24,7 +27,14 @@ function fixture(usage) {
       head: { appendChild() {} }, createElement: () => ({ dataset: {}, remove() {} })
     },
     Fragment: ({ children }) => children,
-    host: { navigate: path => requests.push(path), notify: message => requests.push({ notify: message }) },
+    host: { navigate: path => requests.push(path), notify: message => requests.push({ notify: message }),
+      request: async (op, args) => { requests.push({ op, ...args }); return {} },
+      state: session.id ? {
+        focusedSessionId: { get: () => session.id },
+        busyBySession: { get: () => ({ [session.id]: session.busy }), listen: fn => { busyListener = fn } },
+      } : undefined },
+    sdk: { COMPOSER_AREAS: { underside: 'composer.underside' } },
+    setTimeout, clearTimeout, setInterval, clearInterval,
     PALETTE_AREA: 'palette', ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar',
     Button: ({ children, ...props }) => ({ type: 'button', props, children }),
     Codicon: () => null,
@@ -45,7 +55,7 @@ function fixture(usage) {
   }
   vm.runInNewContext(source, sandbox, { filename: 'desktop/plugin.js' })
   const registrations = []
-  sandbox.plugin.register({ rest: (path, options) => { requests.push(options ? { path, ...options } : path); return Promise.resolve({ changed: false, results: [], message: 'ok' }) }, os: {}, onDispose() {}, registerMany: entries => registrations.push(...entries) })
+  sandbox.plugin.register({ rest: (path, options) => { requests.push(options ? { path, ...options } : path); return Promise.resolve({ changed: false, results: [], message: 'ok' }) }, os: {}, onDispose(fn) { dispose.push(fn) }, onEvent(name, fn) { if (name === 'plugin.harp.quota') quotaEvent = fn }, registerMany: entries => registrations.push(...entries) })
   function expand(node) {
     if (Array.isArray(node)) return node.map(expand)
     if (node == null || typeof node !== 'object') return node
@@ -66,8 +76,37 @@ function fixture(usage) {
   }
   const flatten = list => list.flatMap(c => (Array.isArray(c) ? flatten(c) : [c]))
   const text = tree => nodes(tree, n => typeof n.type === 'string').flatMap(n => flatten(n.children).filter(c => typeof c === 'string')).join(' ')
-  return { registrations, requests, render, nodes, text, slots, results, countdown: (...args) => sandbox.countdown(...args) }
+  return { registrations, requests, render, nodes, text, slots, results,
+    quotaEvent, onBusy: () => busyListener?.(), dispose: () => dispose.forEach(fn => fn()),
+    renderQuota: id => { index = 0; return expand(registrations.find(x => x.id === id).render()) },
+    countdown: (...args) => sandbox.countdown(...args) }
 }
+
+test('the focused chat can ignore, toggle and explicitly apply its quota route', async (t) => {
+  const session = { id: 'chat', busy: true }
+  const app = fixture({}, session)
+  t.after(app.dispose)
+  const quota = { provider: 'anthropic', used: 93, auto: true, pick: { provider: 'openai-codex', model: 'gpt-sol', effort: 'medium' } }
+  app.quotaEvent({ session_id: 'other', quota })
+  assert.equal(app.renderQuota('quota-notice'), null)
+  app.quotaEvent({ session_id: 'chat', quota })
+  assert.match(app.text(app.renderQuota('quota-pane')), /93% used/)
+  let strip = app.renderQuota('quota-notice')
+  assert.equal(button(app, strip, 'Switch now').props.disabled, true)
+  button(app, strip, 'Auto-switch on').props.onClick()
+  assert.ok(button(app, app.renderQuota('quota-notice'), 'Auto-switch off'))
+  button(app, app.renderQuota('quota-notice'), 'Ignore').props.onClick()
+  app.quotaEvent({ session_id: 'chat', quota })
+  assert.equal(app.renderQuota('quota-notice'), null)
+  app.quotaEvent({ session_id: 'chat', quota: null })
+  app.quotaEvent({ session_id: 'chat', quota })
+  session.busy = false
+  app.onBusy()
+  await button(app, app.renderQuota('quota-notice'), 'Switch now').props.onClick()
+  assert.deepEqual(app.requests.filter(x => x.op === 'config.set').map(x => [x.session_id, x.key, x.value]), [
+    ['chat', 'model', 'gpt-sol --provider openai-codex --session'], ['chat', 'reasoning', 'medium']
+  ])
+})
 
 test('HARP toolbar exposes its own account actions without invoking account-pool', () => {
   const app = fixture({ configured: false, usage: [] })
@@ -176,9 +215,9 @@ test('account actions are disabled for providers HARP cannot manage', () => {
   for (const label of ['Live usage', 'Wake', 'Balance now', 'Add account']) assert.equal(app.nodes(page, n => n.type === 'button' && n.children.includes(label)).length, 0, label)
 })
 
-test('registers one Desktop page, sidebar entry and palette navigation', () => {
+test('registers the Desktop page, navigation, quota strip and right pane', () => {
   const app = fixture({ configured: false, usage: [] })
-  assert.deepEqual(Array.from(app.registrations, entry => entry.area), ['routes', 'sidebar', 'palette'])
+  assert.deepEqual(Array.from(app.registrations, entry => entry.area), ['routes', 'sidebar', 'palette', 'composer.underside', 'panes'])
   assert.equal(app.registrations[0].data.path, '/harp')
   assert.equal(app.registrations[1].data.path, '/harp')
   app.registrations[2].data.run()
@@ -282,7 +321,7 @@ test('top row picks Diagram or a provider; the second row holds the five views',
   app.results.router = { data: routerData(), refetch() {} }
   tab(app, 'Diagram').props.onClick()
   const diagram = app.render()
-  assert.match(app.text(diagram), /ROUTING TO PROVIDER/)
+  assert.match(app.text(diagram), /Jev Thinking/)
   assert.equal(app.nodes(diagram, n => n.props?.role === 'group' && app.text(n).includes('Activity')).length, 0)
   assert.equal(app.nodes(diagram, n => n.type === 'button' && n.children.includes('Add account')).length, 0)
   tab(app, 'Codex').props.onClick()
@@ -344,7 +383,7 @@ function routerPage(data = routerData()) {
 test('diagram shows the router: key state, flow, candidates, load and learning', () => {
   const app = routerPage()
   const text = app.text(app.render())
-  for (const part of [/Jev API found/, /Tony/, /ROUTING TO PROVIDER/, /gpt-6-sol/, /Shadow/, /91%/, /near its limit/, /why does the app crash/, /9 of 12/])
+  for (const part of [/Jev API found/, /Tony/, /Jev Thinking/, /Provider/, /Agent/, /Effort/, /gpt-6-sol/, /Shadow/, /91%/, /near its limit/, /why does the app crash/, /9 of 12/])
     assert.match(text, part)
 })
 
@@ -426,7 +465,7 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   app.slots[0] = 'summary'
   let page = app.render()
   assert.match(app.text(page), /ACTIVITY/)
-  assert.ok(button(app, page, '24 h'))
+  assert.ok(!button(app, page, 'Today'))
   assert.ok(button(app, page, 'Week'))
   assert.ok(button(app, page, 'Month'))
   let cells = app.nodes(page, n => n.props?.className?.startsWith('harp-gb-cell'))
@@ -455,12 +494,7 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   const headerText = app.nodes(page, n => n.props?.className === 'harp-gb-head').map(n => n.children[0]).filter(t => t !== 'Total')
   assert.deepEqual(headerText, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
 
-  app.results.heat = { data: heatData('day'), refetch() {} }
-  button(app, page, '24 h').props.onClick()
-  page = app.render()
-  cells = app.nodes(page, n => n.props?.className?.startsWith('harp-gb-cell'))
-  assert.equal(cells.length, 24)
-  assert.equal(app.nodes(page, n => n.props?.className === 'harp-gb-total').length, 1)
+  assert.equal(cells.filter(c => c.props.className.includes('harp-gb-date')).length, 30)
 })
 
 test('HARP opens on Summary', () => {

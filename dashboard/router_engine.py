@@ -63,7 +63,17 @@ class Engine:
         except (OSError, ValueError):
             return {}
         fresh = {p: v for p, v in data.items() if self._clock() - v.get("at", 0) < LOAD_MAX_AGE}
-        return {p: router.provider_load(v.get("peaks") or {}, settings["plans"].get(p, {})) for p, v in fresh.items()}
+        result = {}
+        for provider, readings in fresh.items():
+            peaks = readings.get("peaks") or {}
+            known = {account: peak for account, peak in peaks.items() if peak is not None}
+            load = router.provider_load(known, settings["plans"].get(provider, {}))
+            if load is not None:
+                quota_fresh = 0 <= self._clock() - readings["at"] <= 600
+                load["pool_near_limit"] = quota_fresh and len(known) == len(peaks) and min(known.values()) >= settings["limit"]
+                load["pool_has_room"] = quota_fresh and min(known.values()) < settings["limit"]
+                result[provider] = load
+        return result
 
     # ---------------------------------------------------------------- Jev key
     def jev_status(self, force=False):

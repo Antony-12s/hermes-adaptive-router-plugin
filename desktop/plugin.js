@@ -19,6 +19,123 @@ const notify = (kind, message) => host.notify?.({ kind, message })
 const failure = error => error?.message || String(error)
 const LIVE_MAX_AGE = 300
 const liveRequested = {}
+const quotaNotices = new Map()
+const quotaChoices = new Map()
+const quotaListeners = new Set()
+const quotaEvent = 'plugin.harp.quota'
+const quotaDelay = 20000
+let quotaTimer
+
+const focusedChat = () => host.state?.focusedSessionId?.get?.() || ''
+const storedChat = () => host.state?.focusedStoredSessionId?.get?.() || ''
+const syncQuota = () => quotaListeners.forEach(listener => listener())
+const cancelQuotaTimer = () => clearTimeout(quotaTimer)
+
+function focusNotice() {
+  return quotaNotices.get(focusedChat()) || quotaNotices.get(storedChat())
+}
+
+async function switchQuota(notice, automatic = false) {
+  const session = focusedChat()
+  if (!session || focusNotice() !== notice || !notice.pick || notice.switching ||
+      (automatic && !notice.auto)) return
+  if (host.state?.busyBySession?.get?.()?.[session]) return
+  cancelQuotaTimer()
+  notice.switching = true
+  notice.status = ''
+  syncQuota()
+  const { provider, model, effort } = notice.pick
+  try {
+    const result = await host.request('config.set', {
+      session_id: session, key: 'model', value: `${model} --provider ${provider} --session`,
+    })
+    if (result?.confirm_required) {
+      notice.auto = false
+      notice.status = result.confirm_message || 'Confirm the model in Hermes before switching.'
+      return
+    }
+    await host.request('config.set', { session_id: session, key: 'reasoning', value: effort })
+    notice.status = `Switched to ${model} · ${effort}. Applies to the next message.`
+    notice.pick = null
+  } catch (error) {
+    notice.auto = false
+    notice.status = failure(error)
+  } finally {
+    notice.switching = false
+    syncQuota()
+  }
+}
+
+function scheduleQuota() {
+  cancelQuotaTimer()
+  const notice = focusNotice()
+  if (!notice?.auto || !notice.pick || notice.ignored || notice.switching) return
+  const wait = notice.deadline - Date.now()
+  if (wait <= 0) void switchQuota(notice, true)
+  else quotaTimer = setTimeout(() => void switchQuota(notice, true), wait)
+}
+
+function receiveQuota(frame) {
+  const payload = frame?.payload ?? frame
+  const id = payload?.session_id
+  if (!id || (id !== focusedChat() && id !== storedChat())) return
+  const previous = quotaNotices.get(id)
+  if (!payload.quota) {
+    if (!previous?.switching && !previous?.status) quotaNotices.delete(id)
+  } else if (previous?.provider === payload.quota.provider && previous.ignored) {
+    return
+  } else if (!previous?.switching) {
+    const incoming = payload.quota
+    const sameOffer = previous?.provider === incoming.provider &&
+      previous?.pick?.provider === incoming.pick?.provider && previous?.pick?.model === incoming.pick?.model
+    quotaNotices.set(id, { ...incoming,
+      auto: quotaChoices.get(id) ?? incoming.auto,
+      deadline: sameOffer ? previous.deadline : Date.now() + quotaDelay,
+    })
+  }
+  syncQuota()
+  scheduleQuota()
+}
+
+function refreshQuotaReadings() {
+  if (!focusedChat()) return
+  const now = Date.now()
+  for (const provider of ['anthropic', 'openai-codex']) {
+    if (now - (liveRequested[provider] || 0) < LIVE_MAX_AGE * 1000) continue
+    liveRequested[provider] = now
+    post('/pool/live', { provider }).catch(() => {})
+  }
+}
+
+function QuotaNotice({ monitor = false } = {}) {
+  const [, update] = useState(0)
+  useEffect(() => {
+    const listener = () => update(value => value + 1)
+    quotaListeners.add(listener)
+    return () => quotaListeners.delete(listener)
+  }, [])
+  const notice = focusNotice()
+  if (!notice || notice.ignored) return monitor ? h('p', null, 'No quota warning for this chat.') : null
+  const busy = notice.switching || !!host.state?.busyBySession?.get?.()?.[focusedChat()]
+  const toggle = () => {
+    notice.auto = !notice.auto
+    quotaChoices.set(quotaNotices.get(focusedChat()) === notice ? focusedChat() : storedChat(), notice.auto)
+    notice.deadline = Date.now() + quotaDelay
+    syncQuota()
+    scheduleQuota()
+  }
+  return h('div', { role: 'status', style: { padding: '8px', fontSize: '.75rem' } },
+    h('div', null, notice.status || `${notice.provider} pool is near its quota limit (${notice.used}% used).`),
+    notice.pick && h('div', null, `${notice.pick.provider} · ${notice.pick.model} · ${notice.pick.effort}`),
+    notice.pick && h(Button, { size: 'sm', disabled: busy, onClick: () => switchQuota(notice) }, 'Switch now'),
+    notice.pick && h(Button, { size: 'sm', role: 'switch', 'aria-checked': notice.auto, disabled: notice.switching, onClick: toggle },
+      notice.auto ? 'Auto-switch on' : 'Auto-switch off'),
+    h(Button, { size: 'sm', variant: 'ghost', disabled: notice.switching, onClick: () => {
+      notice.ignored = true
+      cancelQuotaTimer()
+      syncQuota()
+    } }, 'Ignore'))
+}
 
 // Match the density, surfaces, and controls of the Accounts desktop page.
 const CSS = `
@@ -96,6 +213,7 @@ const CSS = `
 .harp-gb-cell.lvl-4{background:var(--ui-accent)}
 .harp-gb-cell.dashed{background:transparent;border:1px dashed var(--ui-stroke-tertiary)}
 .harp-gb-cell.ring{outline:1.5px solid var(--ui-text-primary);outline-offset:-1.5px}
+.harp-gb-cell.harp-gb-date{display:grid;place-items:center;min-height:20px;font-style:normal;font-size:11px;font-variant-numeric:tabular-nums;color:var(--ui-text-primary);text-shadow:0 1px 2px var(--ui-bg-primary)}
 .harp-gb-cell:not(.dashed):hover,.harp-gb-cell:not(.dashed):focus-visible{outline:1.5px solid var(--ui-text-primary);outline-offset:-1.5px}
 .harp-gb-total{display:flex;align-items:center;gap:6px;justify-content:flex-end;font-size:.6875rem;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums}
 .harp-gb-bar{display:block;height:6px;border-radius:3px;background:var(--ui-accent)}
@@ -112,15 +230,15 @@ const CSS = `
 .harp-key.warn{border-color:color-mix(in srgb,var(--ui-orange) 60%,transparent)}
 .harp-key b{display:block;font-size:.8125rem;font-weight:600;color:var(--ui-text-primary)}
 .harp-key span{font-size:.6875rem;color:var(--ui-text-tertiary)}
-.harp-tree{position:relative;margin:8px 0 4px}
-.harp-tree svg{position:absolute;inset:0;overflow:visible;pointer-events:none}
-.harp-tree path{fill:none;stroke:var(--ui-stroke-secondary);stroke-width:1.5}
-.harp-tree path.on{stroke:var(--ui-accent);stroke-width:2.4}
-.harp-node{position:absolute;height:34px;display:flex;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--ui-stroke-tertiary);border-radius:8px;background:var(--ui-bg-secondary);font-size:.75rem;white-space:nowrap;overflow:hidden}
-.harp-node.on{border-color:var(--ui-accent);box-shadow:0 0 0 1px var(--ui-accent)}
-.harp-node.dim{opacity:.55}
-.harp-node.round{border-radius:17px;font-weight:600}
-.harp-node small{margin-left:auto;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums}
+.harp-router-flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px}
+.harp-router-step{min-width:0;display:grid;align-content:start;gap:6px;padding:10px;border:1px solid var(--ui-stroke-tertiary);border-radius:8px;overflow-wrap:anywhere}
+.harp-router-step textarea{box-sizing:border-box;width:100%;resize:vertical;background:var(--ui-bg-secondary);color:inherit;border:1px solid var(--ui-stroke-tertiary);border-radius:4px;padding:5px;font:inherit}
+@media(prefers-reduced-motion:no-preference){
+  .harp-router-flow[data-decision] .harp-router-step{animation:harp-route-in .28s ease-out both}
+  .harp-router-flow[data-decision] .harp-router-step:nth-child(2){animation-delay:.12s}
+  .harp-router-flow[data-decision] .harp-router-step:nth-child(3){animation-delay:.24s}
+  @keyframes harp-route-in{from{opacity:.55;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+}
 .harp-cand{display:grid;grid-template-columns:22px 130px minmax(140px,1fr) minmax(160px,2fr) 92px auto;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
 .harp-cand input,.harp-cand select,.harp-load select,.harp-tools select{font-size:.75rem}
 .harp-load{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-top:4px}
@@ -197,24 +315,23 @@ const KEY_TEXT = {
 const candId = c => `${c.provider}:${c.model}`
 const shortId = id => (id || '').split(':').slice(1).join(':')
 
-function RouterTree({ settings, decision, by }) {
-  const cands = settings.candidates
-  const ROW = 42, W = { text: 80, judge: 150, route: 170, cand: 230 }, X = { text: 0, judge: 104, route: 282, cand: 482 }
-  const height = Math.max(1, cands.length) * ROW
-  const mid = height / 2 - 17
-  const pick = decision?.pick
-  const path = (x1, y1, x2, y2, on) => { const mx = (x1 + x2) / 2; return h('path', { key: `${x2}-${y2}`, className: on ? 'on' : '', d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }) }
-  const node = (key, x, y, w, cls, ...children) => h('div', { key, className: `harp-node ${cls}`, style: { left: `${x}px`, top: `${y}px`, width: `${w}px` } }, ...children)
-  return h('div', { className: 'harp-tree', style: { height: `${height}px`, minWidth: `${X.cand + W.cand}px` } },
-    h('svg', { width: X.cand + W.cand, height },
-      path(X.text + W.text, mid + 17, X.judge, mid + 17, !!decision), path(X.judge + W.judge, mid + 17, X.route, mid + 17, !!decision),
-      ...cands.map((c, i) => path(X.route + W.route, mid + 17, X.cand, i * ROW + 21, candId(c) === pick))),
-    node('t', X.text, mid, W.text, 'round on', 'Text'),
-    node('j', X.judge, mid, W.judge, `round ${decision ? 'on' : ''}`, by === 'jev' ? 'Jev decides' : 'Local learner'),
-    node('r', X.route, mid, W.route, decision ? 'on' : '', 'ROUTING TO PROVIDER'),
-    ...cands.map((c, i) => node(candId(c), X.cand, i * ROW + 4, W.cand, pick ? (candId(c) === pick ? 'on' : 'dim') : '',
-      h('span', null, `${ROUTER_LABEL[c.provider] || c.provider} · ${c.model}`),
-      decision?.probs?.[candId(c)] != null && h('small', null, `${Math.round(decision.probs[candId(c)] * 100)}%`))))
+function RouterFlow({ decision, jev }) {
+  const pick = decision?.pick || ''
+  const [provider, ...model] = pick.split(':')
+  const [, jevStatus] = KEY_TEXT[jev?.state] || KEY_TEXT.down
+  return h('div', { key: decision?.id, className: 'harp-router-flow', 'data-decision': decision?.id },
+    h('div', { className: 'harp-router-step' }, h('b', null, 'Hermes message'),
+      h('textarea', { readOnly: true, rows: 2, 'aria-label': 'Latest routed Hermes message',
+        value: decision?.text || '', placeholder: 'No routed message yet' })),
+    h('div', { className: 'harp-router-step' }, h('b', null, 'Jev Thinking'),
+      h('span', null, decision?.by === 'jev' ? 'Jev classified this message'
+        : decision ? 'Selected by Local Learner' : 'Waiting for a routed message'),
+      h('small', { className: 'harp-muted' }, jevStatus)),
+    h('div', { className: 'harp-router-step' },
+      h('span', null, h('b', null, 'Provider'), ' · ', pick ? ROUTER_LABEL[provider] || provider : '—'),
+      h('span', null, h('b', null, 'Agent'), ' · ', model.join(':') || '—'),
+      h('span', null, h('b', null, 'Effort'), ' · ', decision?.effort || '—'),
+      decision && h('small', { className: 'harp-muted' }, decision.applied ? 'Apply mode' : 'Shadow recommendation')))
 }
 
 function RouterView({ onAddKey }) {
@@ -235,7 +352,6 @@ function RouterView({ onAddKey }) {
   const tryIt = useJev => act(useJev ? 'Ask Jev' : 'Try', async () => setTried((await post('/router/try', { text: sample, use_jev: useJev })).decision))
   const vote = (row, label) => act('Feedback', async () => { await post('/router/feedback', { id: row.id, label }); setFixing(null); notify('success', 'Learned.'); query.refetch() })
   const [cls, title, detail] = KEY_TEXT[data.jev.state] || KEY_TEXT.down
-  const shown = tried || (data.recent[0] ? { pick: data.recent[0].pick, probs: null } : null)
   const st = data.stats
   return h('div', null,
     h('div', { className: 'harp-tools' },
@@ -250,8 +366,7 @@ function RouterView({ onAddKey }) {
       data.jev.state === 'none'
         ? h(Button, { size: 'sm', variant: 'outline', onClick: onAddKey }, 'Add Jev API key')
         : h(Button, { size: 'sm', variant: 'ghost', disabled: !!busy, onClick: () => act('Check', async () => { await post('/router/check-key', {}); query.refetch() }) }, 'Check now')),
-    h(Section, { title: 'HOW A MESSAGE IS ROUTED' }, h('div', { style: { overflowX: 'auto' } },
-      h(RouterTree, { settings: s, decision: shown, by: tried?.by || data.recent[0]?.by || (data.jev.state === 'ok' ? 'jev' : 'local') }))),
+    h(Section, { title: 'LATEST ROUTED MESSAGE' }, h(RouterFlow, { decision: data.recent[0], jev: data.jev })),
     h(Section, { title: 'MODELS IT CAN PICK' },
       h('div', { className: 'harp-tools' }, 'Strongest first: when unsure it uses the top one. The description tells Jev and the learner what each is for.'),
       ...s.candidates.map((c, i) => h('div', { className: 'harp-cand', key: candId(c) + i },
@@ -501,13 +616,13 @@ function gridHeat({ heads, rows, now }) {
   const rowTotals = rows.map(row => row.cells.reduce((a, c) => a + (c ? c.value : 0), 0))
   const totalMax = Math.max(1, ...rowTotals)
   const cols = heads.length
-  return h('div', { className: 'harp-gb-wrap' }, h('div', { className: 'harp-gb', style: { gridTemplateColumns: `56px repeat(${cols}, minmax(0, 1fr)) 76px` } },
+  return h('div', { className: 'harp-gb-wrap' }, h('div', { className: 'harp-gb', style: { gridTemplateColumns: `82px repeat(${cols}, minmax(0, 1fr)) 76px` } },
     h('span'), ...heads.map((label, i) => h('span', { key: `h${i}`, className: 'harp-gb-head' }, label)), h('span', { className: 'harp-gb-head' }, 'Total'),
     ...rows.flatMap((row, ri) => [
       h('span', { key: `l${ri}`, className: 'harp-gb-row-label' }, row.label),
       ...row.cells.map((cell, ci) => !cell
         ? h('i', { key: `${ri}-${ci}`, className: 'harp-gb-cell dashed' })
-        : h('i', { key: `${ri}-${ci}`, className: `harp-gb-cell lvl-${levelOf(cell.value, top)}${cell.ring ? ' ring' : ''}`, title: cell.title, tabIndex: 0 })),
+        : h('i', { key: `${ri}-${ci}`, className: `harp-gb-cell lvl-${levelOf(cell.value, top)}${cell.ring ? ' ring' : ''}${cell.dateLabel ? ' harp-gb-date' : ''}`, title: cell.title, tabIndex: 0 }, cell.dateLabel)),
       h('span', { key: `t${ri}`, className: 'harp-gb-total' },
         h('i', { className: 'harp-gb-bar', style: { width: `${Math.round(40 * rowTotals[ri] / totalMax)}px` } }),
         number.format(rowTotals[ri]))])))
@@ -515,43 +630,56 @@ function gridHeat({ heads, rows, now }) {
 
 function ActivityHeat({ now }) {
   const [span, setSpan] = useState('week')
-  const query = useQuery({ queryKey: [ID, 'heat', span], queryFn: () => rest(`/activity/heat?span=${span}`), refetchInterval: 300000 })
+  const clientZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  const query = useQuery({ queryKey: [ID, 'heat', span, clientZone],
+    queryFn: () => rest(`/activity/heat?span=${span}&tz=${encodeURIComponent(clientZone)}`), refetchInterval: 300000 })
   const days = query.data?.days || []
-  const currentHour = new Date(now).getHours()
+  const zone = query.data?.timezone || clientZone
+  const clock = new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: '2-digit',
+    day: '2-digit' })
+  const parts = Object.fromEntries(clock.formatToParts(now).map(({ type, value }) => [type, value]))
+  const todayISO = `${parts.year}-${parts.month}-${parts.day}`
+  const timeLabel = new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit',
+    minute: '2-digit', hourCycle: 'h23' }).format(now)
+  const dateLabel = new Intl.DateTimeFormat('en-GB', { timeZone: zone, dateStyle: 'medium' }).format(now)
   let body = null
   if (days.length) {
     if (span === 'month') {
       const n = days.length
-      const today = new Date(now); today.setHours(0, 0, 0, 0)
-      const dates = Array.from({ length: n }, (_, i) => { const d = new Date(today); d.setDate(d.getDate() - (n - 1 - i)); return d })
-      const start = new Date(dates[0]); start.setDate(start.getDate() - ((start.getDay() + 6) % 7))   // the Monday on/before day 1
-      const weeks = Math.ceil((((dates[0].getDay() + 6) % 7) + n) / 7)
+      const dateKey = (day, index) => day.iso_date || new Date(Date.parse(todayISO) - (n - 1 - index) * 86400000).toISOString().slice(0, 10)
+      const byDate = new Map(days.map((day, i) => [dateKey(day, i), day]))
+      const start = new Date(dateKey(days[0], 0))
+      const mondayOffset = (start.getUTCDay() + 6) % 7
+      start.setUTCDate(start.getUTCDate() - mondayOffset)
+      const weeks = Math.ceil((mondayOffset + n) / 7)
       const rows = Array.from({ length: weeks }, (_, w) => {
-        const weekStart = new Date(start); weekStart.setDate(weekStart.getDate() + w * 7)
-        return { label: weekStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+        const weekStart = new Date(start); weekStart.setUTCDate(weekStart.getUTCDate() + w * 7)
+        return { label: weekStart.toLocaleDateString(undefined, { timeZone: 'UTC', month: 'short', day: 'numeric' }),
           cells: Array.from({ length: 7 }, (_, c) => {
-            const date = new Date(weekStart); date.setDate(date.getDate() + c)
-            const index = date >= dates[0] && date <= dates[n - 1] ? Math.round((date - dates[0]) / 86400000) : -1
-            if (index < 0) return null
-            const day = days[index]
+            const date = new Date(weekStart); date.setUTCDate(date.getUTCDate() + c)
+            const iso = date.toISOString().slice(0, 10)
+            const day = byDate.get(iso)
+            if (!day) return null
             const total = day.tokens.reduce((a, b) => a + b, 0)
             const requests = day.requests.reduce((a, b) => a + b, 0)
-            return { value: total, ring: index === n - 1,
+            return { value: total, ring: iso === todayISO, dateLabel: date.getUTCDate(),
               title: `${day.dow} ${day.date} · ${number.format(total)} tokens in ${number.format(requests)} request${requests === 1 ? '' : 's'}` }
           }) }
       })
       body = gridHeat({ heads: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], rows, now })
     } else {
-      const visibleDays = span === 'day' ? days.slice(-1) : days
-      const rows = visibleDays.map((day, i) => ({ label: day.dow,
-        cells: day.tokens.map((value, hr) => ({ value, ring: span === 'day' && hr === currentHour,
+      const rows = days.map(day => ({ label: day.dow,
+        cells: day.tokens.map((value, hr) => ({ value,
           title: `${day.dow} ${day.date} ${String(hr).padStart(2, '0')}:00 · ${number.format(value)} tokens` })) }))
       body = gridHeat({ heads: Array.from({ length: 24 }, (_, hr) => hr % 6 ? '' : String(hr).padStart(2, '0')), rows, now })
     }
   }
   return h(Section, { title: 'ACTIVITY' },
-    h('div', { className: 'harp-tools' }, h('span', { className: 'harp-grow' }),
-      h(SegmentedControl, { options: [{ id: 'day', label: '24 h' }, { id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }], value: span, onChange: setSpan })),
+    h('div', { className: 'harp-tools' },
+      h('span', { className: 'harp-grow', style: { fontVariantNumeric: 'tabular-nums' } },
+        h('time', { dateTime: new Date(now).toISOString() }, `${dateLabel} · ${timeLabel}`),
+        h('span', { className: 'harp-muted' }, ` · ${zone}`)),
+      h(SegmentedControl, { options: [{ id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }], value: span, onChange: setSpan })),
     h(QueryState, { query, label: 'activity' }),
     body)
 }
@@ -982,11 +1110,29 @@ export default {
     style.dataset.plugin = ID
     style.textContent = CSS
     document.head.appendChild(style)
-    ctx.onDispose(() => style.remove())
+    const offQuota = ctx.onEvent?.(quotaEvent, receiveQuota)
+    const onSessionChange = () => { syncQuota(); scheduleQuota() }
+    const offFocus = host.state?.focusedSessionId?.listen?.(() => { onSessionChange(); refreshQuotaReadings() })
+    const offStored = host.state?.focusedStoredSessionId?.listen?.(onSessionChange)
+    const offBusy = host.state?.busyBySession?.listen?.(onSessionChange)
+    const quotaPoll = typeof host.state?.focusedSessionId?.get === 'function'
+      ? setInterval(refreshQuotaReadings, LIVE_MAX_AGE * 1000) : null
+    refreshQuotaReadings()
+    ctx.onDispose(() => {
+      style.remove()
+      for (const off of [offQuota, offFocus, offStored, offBusy]) if (typeof off === 'function') off()
+      cancelQuotaTimer()
+      if (quotaPoll !== null) clearInterval(quotaPoll)
+      quotaNotices.clear()
+      quotaChoices.clear()
+    })
     ctx.registerMany([
       { id: 'page', area: ROUTES_AREA, data: { path: ROUTE }, render: () => h(HarpPage) },
       { id: 'nav', area: SIDEBAR_NAV_AREA, order: 56, data: { path: ROUTE, label: 'HARP', codicon: 'graph' } },
-      { id: 'open', area: PALETTE_AREA, data: { id: 'harp.open', label: 'HARP: accounts and usage', keywords: ['harp', 'router', 'usage'], run: () => host.navigate(ROUTE) } }
+      { id: 'open', area: PALETTE_AREA, data: { id: 'harp.open', label: 'HARP: accounts and usage', keywords: ['harp', 'router', 'usage'], run: () => host.navigate(ROUTE) } },
+      ...(sdk.COMPOSER_AREAS?.underside ? [{ id: 'quota-notice', area: sdk.COMPOSER_AREAS.underside, render: () => h(QuotaNotice) }] : []),
+      { id: 'quota-pane', area: 'panes', title: 'HARP quota', data: { placement: 'right', width: '320px' },
+        render: () => h(QuotaNotice, { monitor: true }) }
     ])
   }
 }

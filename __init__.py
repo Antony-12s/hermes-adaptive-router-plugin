@@ -133,6 +133,37 @@ def _engine():
     return _ENGINE
 
 
+def _publish_quota(engine, settings, session, provider, decision):
+    if not session or not provider or not decision:
+        return
+    from hermes_cli.plugin_events import broadcast_plugin_event
+
+    loads = engine.loads(settings)
+    active = loads.get(provider, {})
+    quota = None
+    if active.get("pool_near_limit"):
+        candidates = {f"{row['provider']}:{row['model']}": row for row in settings["candidates"]}
+        ranked = [decision["pick"], *sorted(candidates, key=lambda item: -decision.get("probs", {}).get(item, 0))]
+        alternate = next((candidates[item] for item in ranked if item in candidates
+                          and candidates[item]["provider"] != provider
+                          and loads.get(candidates[item]["provider"], {}).get("pool_has_room")), None)
+        pick = None
+        if alternate:
+            effort = ("low", "medium", "high")
+            level = decision["effort"] if decision["effort"] in effort else "medium"
+            cap = alternate.get("cap", "high")
+            pick = {"provider": alternate["provider"], "model": alternate["model"],
+                    "effort": effort[min(effort.index(level), effort.index(cap))]}
+        quota = {"provider": provider, "used": active["used"], "pick": pick, "auto": settings["apply"]}
+    broadcast_plugin_event("harp", "quota", {"session_id": session, "quota": quota})
+
+
+def _decide_turn(engine, settings, text, session, platform, model, provider):
+    decision = engine.decide(text, session, platform, model)
+    _quiet(_publish_quota, engine, settings, session, provider, decision)
+    return decision
+
+
 def route_turn(session_id=None, user_message=None, platform=None, model=None, **_metadata):
     """pre_llm_call: decide provider/model/effort for this message.
 
@@ -149,13 +180,13 @@ def route_turn(session_id=None, user_message=None, platform=None, model=None, **
         if int(getattr(agent, "_delegate_depth", 0) or 0) > 0:
             return None   # delegate_task child: its model is the delegation backend's (model_map) call
         text = _sibling("router").message_text(user_message)
+        provider = getattr(agent, "provider", "") or ""
         if not settings["apply"]:
             import threading
-            threading.Thread(target=_quiet, args=(engine.decide, text, session, platform or "", model or ""),
+            threading.Thread(target=_quiet, args=(_decide_turn, engine, settings, text, session, platform or "", model or "", provider),
                              daemon=True, name="harp-route").start()
             return None
-        decision = engine.decide(text, session, platform or "", model or "")
-        provider = getattr(agent, "provider", "") or ""
+        decision = _decide_turn(engine, settings, text, session, platform or "", model or "", provider)
         if decision and agent is not None and decision["pick"].split(":", 1)[0] == provider:
             _TURN_ROUTES[session] = decision
     except Exception:  # noqa: BLE001 - routing must never break a turn

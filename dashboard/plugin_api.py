@@ -11,7 +11,8 @@ import sys
 import threading
 import time
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -127,7 +128,11 @@ def _read_all(provider, pool):
     LIVE[provider] = {"read_at": time.time(), "accounts": readings}
     if provider not in contract.KEY_PROVIDERS:
         try:   # the router's load view: weighted by each account's plan
-            _engine().record_load(provider, {i: r["peak"] for i, r in readings.items() if r.get("peak") is not None})
+            _engine().record_load(provider, {
+                entry.id: readings.get(entry.id, {}).get("peak") for entry in pool.entries()
+                if getattr(entry, "last_status", None) not in ("dead", "exhausted")
+                and getattr(entry, "last_error_reason", None) != "parked"
+            })
         except Exception:  # noqa: BLE001 - load is advisory
             pass
     return snapshots
@@ -629,12 +634,20 @@ def get_activity(provider: str, hours: float = 24):
 
 
 @router.get("/activity/heat")
-def get_activity_heat(span: str = "week"):
+def get_activity_heat(span: str = "week", tz: str = "UTC"):
     """Tokens-by-hour grid across every configured provider, for the Summary tab."""
     days = {"day": 1, "week": 7, "month": 30}.get(span)
     if days is None:
         raise HTTPException(400, "span must be day, week or month.")
-    return {"span": span, "days": pool_state.combined_chart(_db(), list(ROUTER_PROVIDERS) + ["jev"], days)}
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        if tz == "Asia/Bangkok":
+            zone = timezone(timedelta(hours=7))
+        else:
+            tz, zone = "UTC", timezone.utc
+    return {"span": span, "timezone": tz,
+            "days": pool_state.combined_chart(_db(), list(ROUTER_PROVIDERS) + ["jev"], days, zone=zone)}
 
 
 @router.get("/health")

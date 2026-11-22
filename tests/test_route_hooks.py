@@ -1,6 +1,7 @@
 import unittest
+import sys
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import __init__ as harp
 
@@ -36,6 +37,27 @@ class HookTests(unittest.TestCase):
         target(*args)
         self.assertEqual(engine.calls, [("hi", "s1", "desktop", "opus")])
         self.assertEqual(harp._TURN_ROUTES, {})
+
+    def test_quota_event_preserves_a_spare_account_and_caps_the_alternate_effort(self):
+        broadcast = Mock()
+        settings = {"apply": True, "candidates": [
+            {"provider": "anthropic", "model": "opus", "cap": "high"},
+            {"provider": "openai-codex", "model": "sol", "cap": "medium"},
+        ]}
+        decision = {"pick": "anthropic:opus", "effort": "high"}
+        anthropic = {"pool_near_limit": False, "pool_has_room": True, "used": 92}
+        codex = {"pool_has_room": True, "used": 21}
+        engine = SimpleNamespace(loads=lambda _: {"anthropic": anthropic, "openai-codex": codex})
+        with patch.dict(sys.modules, {"hermes_cli.plugin_events": SimpleNamespace(broadcast_plugin_event=broadcast)}):
+            harp._publish_quota(engine, settings, "chat", "anthropic", decision)
+            broadcast.assert_called_once_with("harp", "quota", {"session_id": "chat", "quota": None})
+            anthropic["pool_near_limit"] = True
+            harp._publish_quota(engine, settings, "chat", "anthropic", decision)
+            notice = broadcast.call_args.args[2]["quota"]
+            self.assertEqual(notice["pick"], {"provider": "openai-codex", "model": "sol", "effort": "medium"})
+            codex["pool_has_room"] = False
+            harp._publish_quota(engine, settings, "chat", "anthropic", decision)
+            self.assertIsNone(broadcast.call_args.args[2]["quota"]["pick"])
 
     def test_apply_mode_routes_same_provider_only(self):
         self.run_turn(FakeEngine(apply=True))

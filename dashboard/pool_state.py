@@ -291,19 +291,21 @@ def _blank_activity():
     return {"tokens_24h": 0, "requests_24h": 0, "price_24h": None, "used_by": []}
 
 
-def combined_chart(db, providers, days, now=None):
+def combined_chart(db, providers, days, now=None, *, zone=None):
     """Token-by-hour heatmap across every provider, for the Summary tab's Activity grid."""
     now = time.time() if now is None else now
     if not providers or not Path(db).is_file():
-        return _chart([], now, days)
+        return _chart([], now, days, zone=zone)
+    midnight = datetime.fromtimestamp(now, zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    since = (midnight - timedelta(days=days - 1)).timestamp()
     placeholders = ",".join("?" * len(providers))
     with closing(_open(db)), _read(db) as con:
         rows = con.execute(
             f"SELECT bucket, SUM(tokens), SUM(requests) FROM (SELECT bucket, tokens, requests FROM calls"
             f" WHERE provider IN ({placeholders}) AND bucket >= ? UNION ALL SELECT bucket, tokens, 0 FROM tokens"
             f" WHERE provider IN ({placeholders}) AND bucket >= ?) GROUP BY bucket",
-            (*providers, now - days * 86400, *providers, now - days * 86400)).fetchall()
-    return _chart(rows, now, days)
+            (*providers, since, *providers, since)).fetchall()
+    return _chart(rows, now, days, zone=zone)
 
 
 def last_seen(db):
@@ -363,15 +365,18 @@ def report(db, provider, hours, now=None):
                 models=models, sources=sources, sessions=sessions, chart=_chart(week, now), snapshots=len(snaps))
 
 
-def _chart(rows, now, days_back=7):
+def _chart(rows, now, days_back=7, *, zone=None):
     """`days_back` local days (oldest first), each with 24 hourly token and request totals."""
-    today = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.fromtimestamp(now, zone).replace(hour=0, minute=0, second=0, microsecond=0)
     days = [today - timedelta(days=back) for back in range(days_back - 1, -1, -1)]
     chart = [{"date": d.strftime("%m-%d"), "dow": DAYS[d.weekday()].capitalize(), "tokens": [0] * 24,
               "requests": [0] * 24} for d in days]
     index = {d.date(): i for i, d in enumerate(days)}
+    if zone is not None:
+        for entry, day in zip(chart, days):
+            entry["iso_date"] = day.date().isoformat()
     for bucket, tokens, requests in rows:
-        moment = datetime.fromtimestamp(bucket)
+        moment = datetime.fromtimestamp(bucket, zone)
         if moment.date() in index:
             chart[index[moment.date()]]["tokens"][moment.hour] += tokens or 0
             chart[index[moment.date()]]["requests"][moment.hour] += requests or 0
