@@ -143,26 +143,82 @@ function QuotaNotice({ monitor = false, settingsOnly = false, defaultAuto = fals
     } }, 'Ignore'))
 }
 
+function AccountQuotaWindow({ account, provider, name, window, meter, now }) {
+  const percent = window?.used_percent
+  const label = `${provider} · ${account} · ${name}`
+  const bounded = Math.max(0, Math.min(100, percent))
+  return h('div', { className: 'harp-tracker-window' },
+    h('span', { className: 'harp-muted' }, name),
+    meter === 'ring' && Number.isFinite(percent)
+      ? h('span', { className: 'harp-tracker-ring', role: 'meter', 'aria-label': label,
+        'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': bounded,
+        style: { '--harp-quota-used': `${bounded}%` } }, `${number.format(percent)}%`)
+      : h(Meter, { percent, label }),
+    h('small', { className: 'harp-tracker-reset', title: window?.reset_at ? resetText(window.reset_at) : undefined },
+      countdown(window?.reset_at, now) || 'Reset time unavailable'))
+}
+
+function TrackerProvider({ title, query, meter, now }) {
+  const accounts = query.data?.accounts || []
+  return h('details', { className: 'harp-tracker-provider', open: true },
+    h('summary', null, h('strong', null, title), ' ', h('small', { className: 'harp-muted' }, accounts.length)),
+    !query.data || query.isError ? h(QueryState, { query, label: `${title} accounts` }) : null,
+    query.data && !accounts.length && h('p', { className: 'harp-muted' }, 'No accounts'),
+    ...accounts.map(account => {
+      const label = account.label || account.id || 'Unnamed account'
+      const duplicate = accounts.some(other => other !== account && other.label === label)
+      const name = duplicate && account.id ? `${label} · ${account.id}` : label
+      const reportedPlan = account.usage?.plan?.trim()
+      const plan = reportedPlan && !reportedPlan.toLowerCase().startsWith(title.toLowerCase())
+        ? `${title} ${reportedPlan}` : reportedPlan || 'Unknown plan'
+      const windows = account.usage?.windows || []
+      const weekly = windows.find(window => WEEK.test(window.label || ''))
+      const session = windows.find(window => /session|\b5[\s-]*(?:h|hours?)\b/i.test(window.label || '')
+        && !WEEK.test(window.label || ''))
+      return h('div', { key: account.id || name, className: 'harp-tracker-account' },
+        h('b', null, plan),
+        h('small', { className: 'harp-muted', title: account.id || undefined }, name),
+        h(AccountQuotaWindow, { account: name, provider: title, name: '5-hour limit', window: session, meter, now }),
+        h(AccountQuotaWindow, { account: name, provider: title, name: 'Weekly limit', window: weekly, meter, now }))
+    }))
+}
+
+function LiveRouting() {
+  const query = useQuery({ queryKey: [ID, 'live-routing'], queryFn: () => rest('/routing/live'), refetchInterval: 5000 })
+  const calls = query.data?.calls || []
+  return h('section', { className: 'harp-card' }, h('b', null, 'Live routing'),
+    h(QueryState, { query, label: 'live routing' }),
+    query.data && !calls.length && h('p', { className: 'harp-muted' }, 'No model calls recorded yet.'),
+    h('ol', { className: 'harp-live-calls' }, ...calls.map(call => {
+      const timestamp = stamp(call.ts * 1000, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      const classifier = { jev: 'Jev', local: 'Local' }[call.source]
+      const meta = [timestamp, call.kind, classifier, call.step && `step ${call.step}`, call.effort && `effort ${call.effort}`,
+        Number.isFinite(call.duration) && `${call.duration.toFixed(1)}s`,
+        Number.isFinite(call.tokens) && `${number.format(call.tokens)} tok`, call.status === 'error' && 'failed']
+      const text = call.text || (call.kind === 'main' ? 'Hermes request' : call.kind)
+      return h('li', { key: call.id },
+        h('div', { className: 'harp-live-request' }, h('strong', { title: text }, text),
+          h('small', { className: 'harp-muted', title: meta.filter(Boolean).join(' · ') }, meta.filter(Boolean).join(' · '))),
+        h('div', { className: 'harp-live-target' }, h('strong', null, call.model),
+          h('small', { className: 'harp-muted' }, ROUTER_LABEL[call.provider] || call.provider)))
+    })))
+}
+
 function QuotaPane() {
   const [meter, setMeter] = useState('bar')
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30000)
+    return () => clearInterval(timer)
+  }, [])
   const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
-  const last = query.data?.recent?.[0]
-  const [provider, ...model] = (last?.pick || '').split(':')
+  const anthropic = useProviderAccounts('anthropic')
+  const codex = useProviderAccounts('openai-codex')
   return h('div', { className: 'harp-quota-pane', style: { padding: 8, display: 'grid', gap: 8 } },
     h('section', { className: 'harp-card' }, h('b', null, 'User Tracker'),
-      ...Object.entries(query.data?.loads || {}).filter(([, load]) => load).map(([name, load]) =>
-        h('div', { key: name, style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
-          h('span', null, ROUTER_LABEL[name] || name),
-          meter === 'ring' ? h('span', { role: 'meter', 'aria-label': `${name} quota used`, 'aria-valuemin': 0,
-            'aria-valuemax': 100, 'aria-valuenow': load.used, style: { display: 'grid', placeItems: 'center',
-              width: 36, height: 36, borderRadius: '50%', fontSize: '.65rem',
-              background: `radial-gradient(circle, var(--ui-bg-card) 57%, transparent 59%),conic-gradient(var(--ui-accent) ${load.used}%,var(--ui-bg-quaternary) 0)` } },
-            `${load.used}%`) : h(Meter, { percent: load.used, label: `${name} quota used` }))),
-      !Object.values(query.data?.loads || {}).some(Boolean) && h('p', null, 'No recent quota readings.')),
-    h('section', { className: 'harp-card' }, h('b', null, 'Routing'),
-      last ? h('dl', null, h('dt', null, 'Provider'), h('dd', null, ROUTER_LABEL[provider] || provider),
-        h('dt', null, 'Agent'), h('dd', null, model.join(':')), h('dt', null, 'Effort'), h('dd', null, last.effort))
-        : h('p', null, 'No HARP routing decision yet.')),
+      h(TrackerProvider, { title: 'Anthropic', query: anthropic, meter, now }),
+      h(TrackerProvider, { title: 'Codex', query: codex, meter, now })),
+    h(LiveRouting),
     h(QuotaNotice, { monitor: true }),
     h('details', { className: 'harp-card' }, h('summary', null, 'Settings'),
       h(QuotaNotice, { settingsOnly: true, defaultAuto: !!query.data?.settings?.apply }),
@@ -172,6 +228,20 @@ function QuotaPane() {
 
 // Match the density, surfaces, and controls of the Accounts desktop page.
 const CSS = `
+.harp-tracker-provider{margin-top:6px;display:grid;gap:4px;border:1px solid var(--ui-stroke-tertiary);border-radius:6px;padding:6px}
+.harp-tracker-provider>summary{margin-bottom:4px}
+.harp-tracker-account{padding-left:4px;min-width:0;overflow-wrap:anywhere}
+.harp-tracker-account+.harp-tracker-account{border-top:1px solid var(--ui-stroke-tertiary);padding-top:5px}
+.harp-tracker-account>b{display:block;font-size:.72rem;margin-bottom:1px}
+.harp-tracker-window{display:grid;grid-template-columns:minmax(75px,1fr) minmax(0,1.3fr);align-items:center;gap:6px;min-height:22px;font-size:.69rem}
+.harp-tracker-reset{grid-column:2;text-align:right;color:var(--ui-text-tertiary);margin:0 0 3px;font-variant-numeric:tabular-nums}
+.harp-live-calls{list-style:none;margin:3px 0 0;padding:0}
+.harp-live-calls li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr);align-items:start;gap:6px;padding:4px 0;font-size:.71rem}
+.harp-live-calls li+li{border-top:1px solid var(--ui-stroke-tertiary)}
+.harp-live-request,.harp-live-target{min-width:0}
+.harp-live-request>*,.harp-live-target>*{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.harp-live-target{text-align:right}
+.harp-tracker-ring{justify-self:end;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;font-size:.65rem;background:radial-gradient(circle,var(--ui-bg-card) 57%,transparent 59%),conic-gradient(var(--ui-accent) var(--harp-quota-used),var(--ui-bg-quaternary) 0)}
 .harp-page{display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--ui-surface-background);color:var(--ui-text-secondary);font-size:.75rem}
 .harp-page *{box-sizing:border-box}
 .harp-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 16px 6px}
@@ -578,9 +648,11 @@ const stamp = (value, options) => new Date(value).toLocaleString(undefined, { ..
 
 // Time left until a usage window resets, counting down ("resets in 3h 50m").
 function countdown(iso, now = Date.now()) {
-  const left = Math.floor((Date.parse(iso) - now) / 60000)
-  if (!Number.isFinite(left)) return ''
-  if (left <= 0) return 'resetting…'
+  const remaining = Date.parse(iso) - now
+  if (!Number.isFinite(remaining)) return ''
+  if (remaining <= 0) return 'resetting…'
+  if (remaining < 60000) return 'resets in <1m'
+  const left = Math.floor(remaining / 60000)
   const d = Math.floor(left / 1440), hr = Math.floor((left % 1440) / 60), m = left % 60
   return `resets in ${d ? `${d}d ${hr}h` : hr ? `${hr}h ${String(m).padStart(2, '0')}m` : `${m}m`}`
 }

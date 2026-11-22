@@ -118,8 +118,11 @@ weight of ×1. Change that weight in Diagram if needed. An explicit saved
 work route takes precedence over provider weighting.
 
 Open or close the **Quota** pane with the Hermes sidebar controls. **User
-Tracker** shows recent provider load, **Routing** shows the last HARP router
-pick, and **Settings** switches the quota display between **Progress bar**
+Tracker** groups accounts in provider accordions, with separate 5-hour and
+weekly reset clocks. **Live routing** shows the latest six model calls the
+Hermes hooks observed, including auxiliary calls. HARP keeps up to 100
+events locally and records a short message excerpt only when it matches the
+request. **Settings** switches the quota display between **Progress bar**
 and **Ring**.
 
 In Hermes Desktop, HARP shows a quota notice under the focused chat composer

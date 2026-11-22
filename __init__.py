@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+import threading
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -103,6 +104,7 @@ def _find_agent(session_id):
 def track_account(session_id=None, provider=None, platform=None, usage=None, model=None, response_model=None,
                   **_metadata):
     """post_api_request: count the call's tokens and session against the pool account it used."""
+    record_live_request(provider=provider, usage=usage, model=model, response_model=response_model, **_metadata)
     try:
         agent = _find_agent(str(session_id or "")) if session_id else None
         pool = getattr(agent, "_credential_pool", None)
@@ -120,6 +122,54 @@ def track_account(session_id=None, provider=None, platform=None, usage=None, mod
 
 _ENGINE = None
 _TURN_ROUTES = {}          # session id -> decision to apply for this turn (apply mode only)
+_LIVE_REQUESTS = {}        # request id -> bounded prompt and effort from the outgoing call
+_LIVE_REQUESTS_LOCK = threading.Lock()
+
+
+def remember_live_request(api_request_id=None, user_message=None, request=None, middleware_trace=None, **metadata):
+    if not api_request_id:
+        return
+    request = request if isinstance(request, dict) else {}
+    reasoning = request.get("reasoning")
+    effort = metadata.get("reasoning_effort") or request.get("reasoning_effort")
+    if not effort and isinstance(reasoning, dict):
+        effort = reasoning.get("effort")
+    text = _sibling("router").message_text(user_message)
+    source = ""
+    for trace in middleware_trace or ():
+        if isinstance(trace, dict) and trace.get("source") == "harp-router":
+            classifier = str(trace.get("reason", "")).partition(" ")[0]
+            if classifier in ("jev", "local"):
+                source = classifier
+    with _LIVE_REQUESTS_LOCK:
+        _LIVE_REQUESTS[api_request_id] = (" ".join(text.split())[:120], str(effort or "")[:20], source)
+        if len(_LIVE_REQUESTS) > 128:
+            _LIVE_REQUESTS.pop(next(iter(_LIVE_REQUESTS)))
+
+
+def record_live_request(api_request_id=None, provider=None, model=None, response_model=None,
+                        reasoning_effort=None, api_duration=None, usage=None, api_call_count=None,
+                        aux_task=None, error=None, error_type=None, **_metadata):
+    try:
+        name = response_model or model
+        if not provider or not name:
+            return
+        text = effort = source = ""
+        if not aux_task:
+            with _LIVE_REQUESTS_LOCK:
+                text, effort, source = _LIVE_REQUESTS.pop(api_request_id, ("", "", ""))
+        kind = f"aux:{str(aux_task)[:48]}" if aux_task else "main"
+        duration = api_duration if type(api_duration) in (int, float) and 0 <= api_duration < 86400 else None
+        step = api_call_count if not aux_task and type(api_call_count) is int else None
+        _engine().store.log_live(kind, text if not aux_task else "", str(provider)[:80], str(name)[:150],
+                                 str(reasoning_effort or effort)[:20], duration, reported_tokens(usage),
+                                 step, "error" if error or error_type else "ok", source)
+    except Exception:  # noqa: BLE001 - observers must never interrupt requests
+        pass
+
+
+def record_auxiliary_request(aux_task=None, **kwargs):
+    record_live_request(aux_task=aux_task or "unknown", **kwargs)
 
 
 def _engine():
@@ -251,6 +301,8 @@ def _setup_cli(parser):
 def register(ctx):
     ctx.register_hook("post_api_request", track_account)
     ctx.register_hook("pre_llm_call", route_turn)
+    ctx.register_hook("pre_api_request", remember_live_request)
+    ctx.register_hook("post_auxiliary_call", record_auxiliary_request)
     if hasattr(ctx, "register_delegation_provider"):
         try:
             provider = _sibling("delegation").backend(_engine)

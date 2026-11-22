@@ -172,10 +172,26 @@ class Store:
               CREATE TABLE IF NOT EXISTS samples (id INTEGER PRIMARY KEY, ts REAL, text TEXT, label TEXT,
                 difficulty INTEGER, weight REAL, source TEXT);
               CREATE TABLE IF NOT EXISTS jev_calls (day TEXT PRIMARY KEY, calls INTEGER);
+              CREATE TABLE IF NOT EXISTS live_calls (id INTEGER PRIMARY KEY, ts REAL NOT NULL,
+                kind TEXT NOT NULL, text TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+                effort TEXT NOT NULL, duration REAL, tokens INTEGER, step INTEGER, status TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '');
             """)
 
     def _db(self):
         return closing(sqlite3.connect(self.path))
+
+    def log_live(self, kind, text, provider, model, effort, duration, tokens, step, status, source):
+        with self._db() as db, db:
+            db.execute("INSERT INTO live_calls (ts, kind, text, provider, model, effort, duration, tokens, step, status, source)"
+                       " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                       (time.time(), kind, text, provider, model, effort, duration, tokens, step, status, source))
+            db.execute("DELETE FROM live_calls WHERE id <= (SELECT MAX(id) - 100 FROM live_calls)")
+
+    def live(self, limit=6):
+        with self._db() as db:
+            db.row_factory = sqlite3.Row
+            return [dict(row) for row in db.execute("SELECT * FROM live_calls ORDER BY id DESC LIMIT ?", (limit,))]
 
     def log(self, decision, text, session="", platform="", current="", applied=False):
         with self._db() as db, db:

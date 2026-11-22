@@ -1,5 +1,6 @@
 import unittest
 import sys
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -21,6 +22,28 @@ class FakeEngine:
 class HookTests(unittest.TestCase):
     def tearDown(self):
         harp._TURN_ROUTES.clear()
+        harp._LIVE_REQUESTS.clear()
+
+    def test_live_log_pairs_text_with_the_actual_request_and_labels_auxiliary_calls(self):
+        with tempfile.TemporaryDirectory() as home:
+            from pathlib import Path
+
+            store = harp._sibling("router").Store(Path(home) / "router.sqlite3")
+            with patch.object(harp, "_engine", return_value=SimpleNamespace(store=store)):
+                harp.remember_live_request(api_request_id="one", user_message="review\n the PR",
+                                           request={"reasoning": {"effort": "medium"}},
+                                           middleware_trace=[{"source": "harp-router", "reason": "jev picked sol (medium)"}])
+                harp.remember_live_request(api_request_id="two", user_message="another request")
+                harp.record_auxiliary_request(api_request_id="one", aux_task="next_prompt",
+                                              provider="anthropic", model="haiku", usage={"total_tokens": 15})
+                harp.track_account(api_request_id="one", provider="openai-codex", model="sol",
+                                   response_model="sol-actual", api_duration=1.5, api_call_count=2)
+                harp.track_account(api_request_id="unknown", provider="anthropic", model="opus")
+            unknown, main, auxiliary = store.live()
+            self.assertEqual(unknown["text"], "")
+            self.assertEqual((main["text"], main["model"], main["source"], main["effort"], main["step"]),
+                             ("review the PR", "sol-actual", "jev", "medium", 2))
+            self.assertEqual((auxiliary["kind"], auxiliary["text"], auxiliary["tokens"]), ("aux:next_prompt", "", 15))
 
     def run_turn(self, engine, provider="anthropic", depth=0):
         agent = SimpleNamespace(provider=provider, _delegate_depth=depth)

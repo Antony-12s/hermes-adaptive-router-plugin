@@ -46,7 +46,7 @@ function fixture(usage, session = {}) {
     useQuery: options => {
       requests.push(options)
       const kind = options.queryKey[1]
-      return kind === 'usage' ? results[1] : kind === 'accounts' ? results[0] : (results[kind] || { data: undefined })
+      return kind === 'usage' ? results[1] : kind === 'accounts' ? (results.accountsByProvider?.[options.queryKey[2]] || results[0]) : (results[kind] || { data: undefined })
     },
     Switch: props => ({ type: 'switch', props, children: [] }),
     useState: initial => { const slot = index++; return [slots[slot] ?? initial, value => { slots[slot] = value }] },
@@ -128,15 +128,48 @@ test('Delegation saves a manual work route and Diagram shows the Hermes result',
   assert.match(app.text(app.render()), /LATEST HERMES DELEGATION.*Review PR.*Manual/)
 })
 
-test('Quota pane displays tracker and routing together and can show a ring', () => {
+test('Quota pane shows two independent limits per account with bar and ring views', () => {
   const app = fixture({})
+  app.slots[1] = Date.now()
   app.results.router = { data: routerData(), refetch() {} }
+  app.results['live-routing'] = { data: { calls: [
+    { id: 2, ts: 1795323120, kind: 'aux:next_prompt', provider: 'anthropic', model: 'claude-haiku', duration: 1.5, tokens: 150 },
+    { id: 1, ts: 1795323110, kind: 'main', text: 'why does the app crash', provider: 'openai-codex', model: 'gpt-6-sol', source: 'jev', step: 1, effort: 'medium' },
+  ] }, refetch() {} }
+  const account = (id, label, windows) => ({ id, label, usage: { windows } })
+  const reading = (label, used_percent, minutes) => ({
+    label, used_percent, reset_at: minutes ? new Date(Date.now() + minutes * 60000 + 30000).toISOString() : null,
+  })
+  const anthropic = [
+    account('a1', 'Claude Max', [reading('Current week', 78, 1560), reading('Current session', 91, 130)]),
+    account('a2', 'Claude Pro', [reading('Current week', 24)]),
+  ]
+  const codex = [account('c1', 'Codex ID', [reading('5-hour', 40), reading('Weekly', 58)])]
+  app.results.accountsByProvider = {
+    anthropic: { data: { accounts: anthropic }, refetch() {} },
+    'openai-codex': { data: { accounts: codex }, refetch() {} },
+  }
   const before = app.renderQuota('quota-pane')
-  assert.match(app.text(before), /User Tracker.*Routing.*Settings/)
+  assert.match(app.text(before), /User Tracker.*Live routing.*Settings/)
+  assert.equal(app.nodes(before, node => node.type === 'details' && node.props.className === 'harp-tracker-provider').length, 2)
+  const windows = tree => app.nodes(tree, node => node.props?.className === 'harp-tracker-window')
+  assert.equal(windows(before).length, 6)
+  assert.match(app.text(windows(before)[0]), /5-hour limit.*91%.*resets in 2h 10m/)
+  assert.match(app.text(windows(before)[1]), /Weekly limit.*78%.*resets in 1d 2h/)
+  assert.match(app.text(windows(before)[2]), /5-hour limit.*No reading/)
+  assert.match(app.text(windows(before)[3]), /Weekly limit.*24%/)
+  assert.match(app.text(windows(before)[3]), /Reset time unavailable/)
+  assert.match(app.text(before), /Live routing.*aux:next_prompt.*claude-haiku.*why does the app crash.*main · Jev · step 1 · effort medium.*gpt-6-sol/)
+  for (const detail of ['Codex', 'Anthropic', '1.5s', '150 tok']) {
+    assert.ok(app.text(before).includes(detail), detail)
+  }
   const style = app.nodes(before, node => node.type === 'select')[0]
   style.props.onChange({ target: { value: 'ring' } })
   const rings = app.nodes(app.renderQuota('quota-pane'), node => node.props?.role === 'meter')
-  assert.ok(rings.some(node => node.props['aria-valuenow'] === 91))
+  assert.deepEqual(rings.map(node => node.props['aria-valuenow']), [91, 78, 24, 40, 58])
+  assert.ok(rings.some(node => node.props['aria-label'] === 'Codex · Codex ID · Weekly limit'))
+  codex.push(account('c2', 'Other Codex', []))
+  assert.equal(windows(app.renderQuota('quota-pane')).length, 8)
 })
 
 test('HARP toolbar exposes its own account actions without invoking account-pool', () => {

@@ -596,6 +596,11 @@ def get_router():
     return {**status, "accounts": accounts, "models": {p: _models(p) for p in ROUTER_PROVIDERS}}
 
 
+@router.get("/routing/live")
+def get_live_routing():
+    return {"calls": _engine().store.live()}
+
+
 @router.get("/delegation")
 def get_delegation():
     return {"settings": delegation.settings(_home()),
