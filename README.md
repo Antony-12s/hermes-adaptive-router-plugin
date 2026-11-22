@@ -159,3 +159,7 @@ provider. Mark picks Right or Wrong to teach it.
 ## To do
 
 - Track Jev tokens for calls made by HARP, including Diagram routing and Hermes Delegation. Record provider-reported token counts when available, associate them with the key used, and show a rolling 24-hour total in Type-safe. Show missing usage as unavailable and avoid double-counting calls already tracked by Hermes.
+
+## License
+
+HARP is licensed under the [MIT License](LICENSE).
