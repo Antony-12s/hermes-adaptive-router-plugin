@@ -97,7 +97,7 @@ test('live usage reads the pool through HARP backend', async () => {
   const app = fixture({ configured: false, usage: [] })
   await button(app, app.render(), 'Live usage').props.onClick()
   assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/pool/live').body)), { provider: 'anthropic' })
-  assert.equal(app.nodes(app.render(), n => n.props?.['aria-label'] === 'Personal week: 68% used').length, 1)
+  assert.equal(app.nodes(app.render(), n => n.props?.['aria-label'] === 'Personal week: 32% left').length, 1)
 })
 
 test('wake sends only the accounts picked after confirmation', async () => {
@@ -204,15 +204,22 @@ test('an account with no recorded error counts as usable', () => {
 test('each account row carries its own session and week quota; no separate provider table', () => {
   const app = fixture({ configured: false, usage: [] })
   const page = app.render()
-  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal session: 0% used').length, 1)
-  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal week: 68% used').length, 1)
+  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal session: 100% left').length, 1)
+  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Personal week: 32% left').length, 1)
   assert.doesNotMatch(app.text(page), /PROVIDER QUOTA/)
   const headings = app.nodes(page, n => n.type === 'th').map(n => app.text(n) || n.children.join(''))
   assert.equal(headings.some(x => /Resets/.test(x)), false)
   assert.match(app.text(page), /not running/)
   assert.match(app.text(page), /resets in \d+d \d+h/)
 
-  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === '5h: 25% used').length, 0)
+  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === '5h: 75% left').length, 0)
+
+  // The provider tab's summary cards use the same "left" framing as the Summary tab's "Least left".
+  assert.doesNotMatch(app.text(page), /Highest session|Highest week/)
+  assert.match(app.text(page), /Lowest session left/)
+  assert.match(app.text(page), /Lowest week left/)
+  assert.match(app.text(page), /100% left/)
+  assert.match(app.text(page), /32% left/)
 })
 
 test('tokens card shows the estimated cost and request count', () => {

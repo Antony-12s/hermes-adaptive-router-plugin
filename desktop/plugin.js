@@ -368,15 +368,6 @@ function countdown(iso, now = Date.now()) {
   return `resets in ${d ? `${d}d ${hr}h` : hr ? `${hr}h ${String(m).padStart(2, '0')}m` : `${m}m`}`
 }
 
-function WindowCell({ row, window, name, now }) {
-  if (!row.usage) return h('span', { className: 'harp-muted' }, 'Not read yet')
-  if (!window) return h('span', { className: 'harp-muted' }, '—')
-  return h('div', { className: 'harp-window' },
-    h(Meter, { percent: window.used_percent, label: `${row.label} ${name}` }),
-    h('span', { className: 'harp-reset', title: window.reset_at ? resetText(window.reset_at) : undefined },
-      window.reset_at ? countdown(window.reset_at, now) : 'not running'))
-}
-
 function Accounts({ query, canAct = false, onAction = () => {}, keyed = false }) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(timer) }, [])
@@ -410,8 +401,8 @@ function Accounts({ query, canAct = false, onAction = () => {}, keyed = false })
         }))
       : h('div', { className: 'harp-cards' },
         h(SummaryCard, { title: 'In rotation', value: `${inRotation} / ${rows.length}`, detail: inRotation === rows.length ? 'all usable' : `${rows.length - inRotation} parked or blocked` }),
-        h(SummaryCard, { title: 'Highest session', value: topSession ? `${number.format(topSession.value)}%` : '–', detail: topSession ? topSession.label : 'read live usage', percent: topSession?.value }),
-        h(SummaryCard, { title: 'Highest week', value: topWeek ? `${number.format(topWeek.value)}%` : '–', detail: topWeek ? topWeek.label : 'read live usage', percent: topWeek?.value }),
+        h(SummaryCard, { title: 'Lowest session left', value: topSession ? `${Math.max(0, Math.round(100 - topSession.value))}% left` : '–', detail: topSession ? topSession.label : 'read live usage', percent: topSession ? 100 - topSession.value : undefined }),
+        h(SummaryCard, { title: 'Lowest week left', value: topWeek ? `${Math.max(0, Math.round(100 - topWeek.value))}% left` : '–', detail: topWeek ? topWeek.label : 'read live usage', percent: topWeek ? 100 - topWeek.value : undefined }),
         h(SummaryCard, {
           title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–',
           detail: tokens ? null : 'counting starts with the next request',
@@ -430,8 +421,8 @@ function Accounts({ query, canAct = false, onAction = () => {}, keyed = false })
             const week = pickWindow(row, WEEK, 1)
             return { key: row.id || index, cells: [index + 1,
               h('span', { className: 'harp-account' }, h('span', { className: `harp-dot${usable(row) ? '' : ' off'}`, 'aria-hidden': true }), row.label),
-              h(WindowCell, { row, window: session, name: 'session', now }),
-              h(WindowCell, { row, window: week, name: 'week', now }),
+              h(LeftCell, { row, window: session, name: 'session', now }),
+              h(LeftCell, { row, window: week, name: 'week', now }),
               h('span', { className: 'harp-num' }, row.tokens_24h ? compact.format(row.tokens_24h) : '–'),
               h('span', { className: 'harp-status' }, row.used_by?.length ? row.used_by.join(', ') : 'idle'),
               h(AccountState, { row }),
