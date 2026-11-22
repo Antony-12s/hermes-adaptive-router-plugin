@@ -21,8 +21,8 @@ class HookTests(unittest.TestCase):
     def tearDown(self):
         harp._TURN_ROUTES.clear()
 
-    def run_turn(self, engine, provider="anthropic"):
-        agent = SimpleNamespace(provider=provider)
+    def run_turn(self, engine, provider="anthropic", depth=0):
+        agent = SimpleNamespace(provider=provider, _delegate_depth=depth)
         with patch.object(harp, "_engine", return_value=engine), patch.object(harp, "_find_agent", return_value=agent), \
                 patch("threading.Thread") as thread:
             self.assertIsNone(harp.route_turn(session_id="s1", user_message=[{"type": "text", "text": "hi"}],
@@ -53,6 +53,15 @@ class HookTests(unittest.TestCase):
                                     provider="openai-codex", api_mode="codex_responses")
         self.assertEqual(out["request"], {"model": "mini", "reasoning": {"summary": "auto", "effort": "low"}})
         self.assertEqual(out["source"], "harp-router")
+
+    def test_subagents_are_left_to_the_delegation_backend(self):
+        # delegate_task children (model_map picks their model) are never rerouted or sent to Jev
+        for apply in (False, True):
+            engine = FakeEngine(apply=apply)
+            thread = self.run_turn(engine, depth=1)
+            thread.assert_not_called()
+            self.assertEqual(engine.calls, [])
+            self.assertEqual(harp._TURN_ROUTES, {})
 
     def test_failures_never_break_the_turn(self):
         with patch.object(harp, "_engine", side_effect=RuntimeError("boom")):

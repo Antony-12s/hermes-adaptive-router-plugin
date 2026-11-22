@@ -143,16 +143,18 @@ def route_turn(session_id=None, user_message=None, platform=None, model=None, **
         settings = engine.settings()
         if not settings["enabled"] or not settings["candidates"]:
             return None
-        text = _sibling("router").message_text(user_message)
         session = str(session_id or "")
         _TURN_ROUTES.pop(session, None)
+        agent = _find_agent(session)
+        if int(getattr(agent, "_delegate_depth", 0) or 0) > 0:
+            return None   # delegate_task child: its model is the delegation backend's (model_map) call
+        text = _sibling("router").message_text(user_message)
         if not settings["apply"]:
             import threading
             threading.Thread(target=_quiet, args=(engine.decide, text, session, platform or "", model or ""),
                              daemon=True, name="harp-route").start()
             return None
         decision = engine.decide(text, session, platform or "", model or "")
-        agent = _find_agent(session)
         provider = getattr(agent, "provider", "") or ""
         if decision and agent is not None and decision["pick"].split(":", 1)[0] == provider:
             _TURN_ROUTES[session] = decision
