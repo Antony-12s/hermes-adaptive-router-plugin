@@ -2,9 +2,13 @@
 
 HARP adds model routing, account quota monitoring, and subagent route settings to Hermes Agent and Hermes Desktop. It works with Hermes credential pools for Anthropic and OpenAI Codex and can use Jev by TypeSafe to classify requests.
 
-![HARP routing overview from Hermes message to provider, model, and effort](docs/routing-overview.svg)
+[![MIT License](https://img.shields.io/badge/License-MIT-287658?style=flat-square)](LICENSE)
+[![Open Source](https://img.shields.io/badge/Open%20Source-Yes-287658?style=flat-square)](https://github.com/Antony-12s/hermes-adaptive-router-pluhin)
+[![Cross-platform tests](https://github.com/Antony-12s/hermes-adaptive-router-pluhin/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/Antony-12s/hermes-adaptive-router-pluhin/actions/workflows/tests.yml)
 
-[Cross-platform test results](https://github.com/Antony-12s/hermes-adaptive-router-pluhin/actions/workflows/tests.yml) · [MIT License](LICENSE)
+![HARP desktop preview showing the routing diagram, provider load, account quota, and live routing log](docs/harp-desktop-preview.png)
+
+*Illustrative preview with sample account and quota data.*
 
 ## Features
 
@@ -34,6 +38,8 @@ HARP adds model routing, account quota monitoring, and subagent route settings t
 Use the same Hermes profile for installation, provider authentication, and the gateway. This repository ships one plugin for Windows, Linux, and macOS.
 
 ## Set up HARP
+
+![Routing flow from a Hermes message to provider, model, and effort](docs/routing-overview.svg)
 
 1. In **Anthropic** or **Codex**, use **Add account** if needed and **Live usage** to refresh quota readings. If Hermes omits an Anthropic plan, you can select a display plan for that account in **Quota → User Tracker**. Set routing weights separately in **Diagram → Provider load**.
 2. In **Diagram**, select models that appear in your Hermes model picker, describe the tasks each handles, and set their effort ceilings. Leave **Heavyweight** on **Auto by quota** or choose a preferred model. Save your changes.
