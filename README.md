@@ -3,8 +3,8 @@
 HARP adds model routing, account quota monitoring, and subagent route settings to Hermes Agent and Hermes Desktop. It works with Hermes credential pools for Anthropic and OpenAI Codex and can use Jev by TypeSafe to classify requests.
 
 [![MIT License](https://img.shields.io/badge/License-MIT-287658?style=flat-square)](LICENSE)
-[![Open Source](https://img.shields.io/badge/Open%20Source-Yes-287658?style=flat-square)](https://github.com/Antony-12s/hermes-adaptive-router-pluhin)
-[![Cross-platform tests](https://github.com/Antony-12s/hermes-adaptive-router-pluhin/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/Antony-12s/hermes-adaptive-router-pluhin/actions/workflows/tests.yml)
+[![Open Source](https://img.shields.io/badge/Open%20Source-Yes-287658?style=flat-square)](https://github.com/Antony-12s/hermes-adaptive-router-plugin)
+[![Cross-platform tests](https://github.com/Antony-12s/hermes-adaptive-router-plugin/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/Antony-12s/hermes-adaptive-router-plugin/actions/workflows/tests.yml)
 
 ![HARP desktop preview showing the routing diagram, provider load, account quota, and live routing log](docs/harp-desktop-preview.png)
 
@@ -38,7 +38,7 @@ HARP adds model routing, account quota monitoring, and subagent route settings t
 2. Run these commands from PowerShell on Windows or a terminal on Linux or macOS.
 
    ```text
-   hermes plugins install https://github.com/Antony-12s/hermes-adaptive-router-pluhin.git
+   hermes plugins install https://github.com/Antony-12s/hermes-adaptive-router-plugin.git
    hermes plugins enable harp
    ```
 
