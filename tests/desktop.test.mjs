@@ -90,7 +90,10 @@ test('the focused chat can ignore, toggle and explicitly apply its quota route',
   app.quotaEvent({ session_id: 'other', quota })
   assert.equal(app.renderQuota('quota-notice'), null)
   app.quotaEvent({ session_id: 'chat', quota })
-  assert.match(app.text(app.renderQuota('quota-pane')), /93% used/)
+  assert.match(app.text(app.renderQuota('quota-pane')), /Context.*Active chat.*Working.*93% used/)
+  session.id = 'other'
+  assert.doesNotMatch(app.text(app.renderQuota('quota-pane')), /93% used/)
+  session.id = 'chat'
   let strip = app.renderQuota('quota-notice')
   assert.equal(button(app, strip, 'Switch now').props.disabled, true)
   button(app, strip, 'Auto-switch on').props.onClick()
@@ -144,32 +147,57 @@ test('Quota pane shows two independent limits per account with bar and ring view
     account('a1', 'Claude Max', [reading('Current week', 78, 1560), reading('Current session', 91, 130)]),
     account('a2', 'Claude Pro', [reading('Current week', 24)]),
   ]
-  const codex = [account('c1', 'Codex ID', [reading('5-hour', 40), reading('Weekly', 58)])]
+  const codex = [account('c1', 'Codex ID', [reading('5-hour', 100), reading('Weekly', 58)])]
   app.results.accountsByProvider = {
     anthropic: { data: { accounts: anthropic }, refetch() {} },
     'openai-codex': { data: { accounts: codex }, refetch() {} },
   }
   const before = app.renderQuota('quota-pane')
-  assert.match(app.text(before), /User Tracker.*Live routing.*Settings/)
+  assert.match(app.text(before), /User Tracker.*Live routing.*Context/)
   assert.equal(app.nodes(before, node => node.type === 'details' && node.props.className === 'harp-tracker-provider').length, 2)
   const windows = tree => app.nodes(tree, node => node.props?.className === 'harp-tracker-window')
   assert.equal(windows(before).length, 6)
-  assert.match(app.text(windows(before)[0]), /5-hour limit.*91%.*resets in 2h 10m/)
-  assert.match(app.text(windows(before)[1]), /Weekly limit.*78%.*resets in 1d 2h/)
+  assert.match(app.text(windows(before)[0]), /5-hour limit.*9%.*resets in 2h 10m/)
+  assert.match(app.text(windows(before)[1]), /Weekly limit.*22%.*resets in 1d 2h/)
   assert.match(app.text(windows(before)[2]), /5-hour limit.*No reading/)
-  assert.match(app.text(windows(before)[3]), /Weekly limit.*24%/)
+  assert.match(app.text(windows(before)[3]), /Weekly limit.*76%/)
   assert.match(app.text(windows(before)[3]), /Reset time unavailable/)
-  assert.match(app.text(before), /Live routing.*aux:next_prompt.*claude-haiku.*why does the app crash.*main · Jev · step 1 · effort medium.*gpt-6-sol/)
+  assert.match(app.text(windows(before)[4]), /5-hour limit.*0%/)
+  assert.match(app.text(before), /Live routing.*Preview the Conversation.*aux:next_prompt.*effort unavailable.*claude-haiku.*why does the app crash.*main · Jev · step 1 · effort medium.*gpt-6-sol/)
   for (const detail of ['Codex', 'Anthropic', '1.5s', '150 tok']) {
     assert.ok(app.text(before).includes(detail), detail)
   }
-  const style = app.nodes(before, node => node.type === 'select')[0]
+  app.slots[0] = 'summary'
+  button(app, app.render(), 'Settings').props.onClick()
+  const settings = app.render()
+  assert.match(app.text(settings), /Provider weights.*Delegation.*Diagram.*Copy into a new Hermes chat/)
+  const style = app.nodes(settings, node => node.type === 'select')[0]
   style.props.onChange({ target: { value: 'ring' } })
   const rings = app.nodes(app.renderQuota('quota-pane'), node => node.props?.role === 'meter')
-  assert.deepEqual(rings.map(node => node.props['aria-valuenow']), [91, 78, 24, 40, 58])
+  assert.deepEqual(rings.map(node => node.props['aria-valuenow']), [9, 22, 76, 0, 42])
   assert.ok(rings.some(node => node.props['aria-label'] === 'Codex · Codex ID · Weekly limit'))
   codex.push(account('c2', 'Other Codex', []))
   assert.equal(windows(app.renderQuota('quota-pane')).length, 8)
+})
+
+test('Quota Tracker offers an Anthropic display plan only when metadata is missing', async () => {
+  const app = fixture({})
+  app.results.accountsByProvider = {
+    anthropic: { data: { accounts: [
+      { id: 'a1', label: 'Detected', usage: { plan: 'Max 20x' }, display_plan: 'Pro' },
+      { id: 'a2', label: 'Manual', display_plan: 'Max 5x' },
+    ] }, refetch() {} },
+    'openai-codex': { data: { accounts: [{ id: 'c1', label: 'Personal', usage: { plan: 'Plus' } }] }, refetch() {} },
+  }
+  const pane = app.renderQuota('quota-pane')
+  assert.match(app.text(pane), /Anthropic Max 20x.*Detected.*Anthropic Max 5x.*Manual.*Codex Plus/)
+  const plan = app.nodes(pane, node => node.type === 'select' && node.props['aria-label'] === 'Plan for Manual')[0]
+  assert.equal(plan.props.value, 'Max 5x')
+  assert.equal(app.nodes(pane, node => node.type === 'select' && /^Plan for/.test(node.props['aria-label'])).length, 1)
+  await plan.props.onChange({ target: { value: 'Pro' } })
+  const request = app.requests.find(item => item.path === '/pool/anthropic/display-plan')
+  assert.equal(request.body.id, 'a2')
+  assert.equal(request.body.plan, 'Pro')
 })
 
 test('HARP toolbar exposes its own account actions without invoking account-pool', () => {
@@ -380,7 +408,7 @@ test('top row picks Diagram or a provider; the second row holds the five views',
   const app = fixture({ configured: false, usage: [] })
   const page = app.render()
   const groups = JSON.parse(JSON.stringify(app.nodes(page, n => n.props?.role === 'group').map(g => g.children.map(b => b.children[0]))))
-  assert.deepEqual(groups[0], ['Summary', 'Diagram', 'Delegation', 'Type-safe', 'anthropic', 'Codex'])
+  assert.deepEqual(groups[0], ['Summary', 'Diagram', 'Delegation', 'Type-safe', 'anthropic', 'Codex', 'Settings'])
   assert.deepEqual(groups[1], ['Accounts & usage', 'Activity', 'Report', 'Health', 'Alerts'])
   app.results.router = { data: routerData(), refetch() {} }
   tab(app, 'Diagram').props.onClick()
@@ -472,16 +500,12 @@ test('router edits are saved together', async () => {
   assert.equal(body.candidates.length, 2)
 })
 
-test('feedback and try-it reach the backend', async () => {
+test('feedback reaches the backend and Diagram has no sample runner', async () => {
   const app = routerPage()
   let page = app.render()
   await app.nodes(page, n => n.type === 'button' && n.props['aria-label'] === 'Right pick: why does the app crash')[0].props.onClick()
   assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/router/feedback').body)), { id: 7, label: '' })
-  page = app.render()
-  app.nodes(page, n => n.type === 'input' && n.props['aria-label'] === 'Try a message')[0].props.onChange({ target: { value: 'fix my build' } })
-  page = app.render()
-  await button(app, page, 'Ask Jev').props.onClick()
-  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/router/try').body)), { text: 'fix my build', use_jev: true })
+  assert.doesNotMatch(app.text(app.render()), /TRY A MESSAGE|Ask Jev/)
 })
 
 

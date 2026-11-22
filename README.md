@@ -141,3 +141,7 @@ learner decides on its own for free. Set each account's plan (x1, x5, x20)
 so work moves away from a provider near its limit. It starts in Shadow mode,
 which only records picks; Apply changes model and effort on the session's own
 provider. Mark picks Right or Wrong to teach it.
+
+## To do
+
+- Track Jev tokens for calls made by HARP, including Diagram routing and Hermes Delegation. Record provider-reported token counts when available, associate them with the key used, and show a rolling 24-hour total in Type-safe. Show missing usage as unavailable and avoid double-counting calls already tracked by Hermes.

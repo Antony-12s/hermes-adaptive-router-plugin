@@ -21,6 +21,7 @@ MODES = {   # effort ceiling, confidence needed before trusting a pick
     "best": {"cap": 2, "sure": 0.85},
 }
 PLANS = {"x1": 1, "x5": 5, "x20": 20}
+ANTHROPIC_DISPLAY_PLANS = ("Pro", "Max", "Max 5x", "Max 20x")
 DIFFICULTY = [
     "Trivial: a greeting, small talk, or a one-line factual answer",
     "Moderate: an ordinary task with some reasoning, a short explanation or summary",
@@ -29,6 +30,7 @@ DIFFICULTY = [
 DEFAULTS = {
     "enabled": True, "apply": False, "mode": "balanced", "limit": 85,
     "jev_model": "jev-latest", "jev_daily_cap": 300, "plans": {},
+    "anthropic_display_plans": {},
     "candidates": [   # strongest first; editable on the Diagram page
         {"provider": "anthropic", "model": "claude-opus-5-5", "cap": "high",
          "description": "Hard work: analysis, planning, design, long or careful writing"},

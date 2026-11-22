@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dashboard import router
+from dashboard import router, router_engine
 
 CANDS = [
     {"provider": "anthropic", "model": "opus", "description": "hard analysis planning design", "cap": "high"},
@@ -69,6 +69,20 @@ class DecideTests(unittest.TestCase):
 
 
 class LoadAndSettingsTests(unittest.TestCase):
+    def test_anthropic_display_plans_are_per_account_and_do_not_change_weights(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = router_engine.Engine(tmp)
+            engine.save({"plans": {"anthropic": {"a1": "x20"}}})
+            engine.set_anthropic_display_plan("a1", "Max 5x")
+            engine.set_anthropic_display_plan("a2", "Pro")
+            with self.assertRaises(ValueError):
+                engine.set_anthropic_display_plan("a2", "Unsupported")
+            engine.set_anthropic_display_plan("a1", None)
+
+            stored = router_engine.Engine(tmp).settings()
+            self.assertEqual(stored["anthropic_display_plans"], {"a2": "Pro"})
+            self.assertEqual(stored["plans"], {"anthropic": {"a1": "x20"}})
+
     def test_plan_weight(self):
         load = router.provider_load({"a": 62, "b": 91}, {"a": "x5", "b": "x1"})
         self.assertEqual(load, {"used": 67, "left": 1.99, "capacity": 6})

@@ -25,6 +25,7 @@ const quotaListeners = new Set()
 const quotaEvent = 'plugin.harp.quota'
 const quotaDelay = 20000
 let quotaTimer
+let quotaMeter = 'bar'
 
 const focusedChat = () => host.state?.focusedSessionId?.get?.() || ''
 const storedChat = () => host.state?.focusedStoredSessionId?.get?.() || ''
@@ -129,10 +130,15 @@ function QuotaNotice({ monitor = false, settingsOnly = false, defaultAuto = fals
       scheduleQuota()
     } }, auto ? 'Auto-switch on' : 'Auto-switch off')
   if (settingsOnly) return autoSwitch
-  if (!notice || notice.ignored) return monitor ? h('p', null, 'No quota warning for this chat.') : null
-  const busy = notice.switching || !!host.state?.busyBySession?.get?.()?.[focusedChat()]
-  return h('div', { role: 'status', style: { padding: '8px', fontSize: '.75rem' } },
-    h('div', null, notice.status || `${notice.provider} pool is near its quota limit (${notice.used}% used).`),
+  const working = !!host.state?.busyBySession?.get?.()?.[focusedChat()]
+  const context = monitor && h('div', null, h('strong', null, 'Context'),
+    h('div', { className: 'harp-muted' }, session ? (working ? 'Active chat · Working' : 'Active chat · Idle') : 'Open a chat to see its context.'))
+  if (!notice || notice.ignored) return monitor
+    ? h('section', { className: 'harp-card', 'aria-label': 'Chat context' }, context,
+      notice?.ignored && h('div', { className: 'harp-muted' }, 'Quota warning dismissed for this chat.')) : null
+  const busy = notice.switching || working
+  return h('div', { role: 'status', className: monitor ? 'harp-card' : undefined, style: { padding: '8px', fontSize: '.75rem' } },
+    context, h('div', null, notice.status || `${notice.provider} pool is near its quota limit (${notice.used}% used).`),
     notice.pick && h('div', null, `${notice.pick.provider} · ${notice.pick.model} · ${notice.pick.effort}`),
     notice.pick && h(Button, { size: 'sm', disabled: busy, onClick: () => switchQuota(notice) }, 'Switch now'),
     !monitor && notice.pick && autoSwitch,
@@ -146,19 +152,19 @@ function QuotaNotice({ monitor = false, settingsOnly = false, defaultAuto = fals
 function AccountQuotaWindow({ account, provider, name, window, meter, now }) {
   const percent = window?.used_percent
   const label = `${provider} · ${account} · ${name}`
-  const bounded = Math.max(0, Math.min(100, percent))
+  const remaining = Number.isFinite(percent) ? 100 - Math.max(0, Math.min(100, percent)) : null
   return h('div', { className: 'harp-tracker-window' },
     h('span', { className: 'harp-muted' }, name),
     meter === 'ring' && Number.isFinite(percent)
       ? h('span', { className: 'harp-tracker-ring', role: 'meter', 'aria-label': label,
-        'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': bounded,
-        style: { '--harp-quota-used': `${bounded}%` } }, `${number.format(percent)}%`)
-      : h(Meter, { percent, label }),
+        'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': remaining, 'aria-valuetext': `${number.format(remaining)}% remaining`,
+        style: { '--harp-quota-used': `${remaining}%` } }, `${number.format(remaining)}%`)
+      : h(Meter, { percent: remaining, label, remaining: true }),
     h('small', { className: 'harp-tracker-reset', title: window?.reset_at ? resetText(window.reset_at) : undefined },
       countdown(window?.reset_at, now) || 'Reset time unavailable'))
 }
 
-function TrackerProvider({ title, query, meter, now }) {
+function TrackerProvider({ title, query, meter, now, setDisplayPlan, savingPlan }) {
   const accounts = query.data?.accounts || []
   return h('details', { className: 'harp-tracker-provider', open: true },
     h('summary', null, h('strong', null, title), ' ', h('small', { className: 'harp-muted' }, accounts.length)),
@@ -169,15 +175,21 @@ function TrackerProvider({ title, query, meter, now }) {
       const duplicate = accounts.some(other => other !== account && other.label === label)
       const name = duplicate && account.id ? `${label} · ${account.id}` : label
       const reportedPlan = account.usage?.plan?.trim()
-      const plan = reportedPlan && !reportedPlan.toLowerCase().startsWith(title.toLowerCase())
-        ? `${title} ${reportedPlan}` : reportedPlan || 'Unknown plan'
+      const selectedPlan = reportedPlan || account.display_plan
+      const plan = selectedPlan && !selectedPlan.toLowerCase().startsWith(title.toLowerCase())
+        ? `${title} ${selectedPlan}` : selectedPlan || 'Unknown plan'
       const windows = account.usage?.windows || []
       const weekly = windows.find(window => WEEK.test(window.label || ''))
       const session = windows.find(window => /session|\b5[\s-]*(?:h|hours?)\b/i.test(window.label || '')
         && !WEEK.test(window.label || ''))
       return h('div', { key: account.id || name, className: 'harp-tracker-account' },
-        h('b', null, plan),
+        h('b', null, plan, !reportedPlan && account.display_plan && h('small', { className: 'harp-muted' }, ' · Manual')),
         h('small', { className: 'harp-muted', title: account.id || undefined }, name),
+        !reportedPlan && setDisplayPlan && account.id && h('select', {
+          className: 'harp-select', value: account.display_plan || '', 'aria-label': `Plan for ${name}`,
+          disabled: savingPlan, onChange: event => setDisplayPlan(account.id, event.target.value || null),
+        }, h('option', { value: '' }, 'Use reported plan'), ...['Pro', 'Max', 'Max 5x', 'Max 20x'].map(option =>
+          h('option', { key: option, value: option }, option))),
         h(AccountQuotaWindow, { account: name, provider: title, name: '5-hour limit', window: session, meter, now }),
         h(AccountQuotaWindow, { account: name, provider: title, name: 'Weekly limit', window: weekly, meter, now }))
     }))
@@ -192,38 +204,75 @@ function LiveRouting() {
     h('ol', { className: 'harp-live-calls' }, ...calls.map(call => {
       const timestamp = stamp(call.ts * 1000, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       const classifier = { jev: 'Jev', local: 'Local' }[call.source]
-      const meta = [timestamp, call.kind, classifier, call.step && `step ${call.step}`, call.effort && `effort ${call.effort}`,
+      const meta = [timestamp, call.kind, classifier, call.step && `step ${call.step}`, call.effort ? `effort ${call.effort}` : 'effort unavailable',
         Number.isFinite(call.duration) && `${call.duration.toFixed(1)}s`,
         Number.isFinite(call.tokens) && `${number.format(call.tokens)} tok`, call.status === 'error' && 'failed']
-      const text = call.text || (call.kind === 'main' ? 'Hermes request' : call.kind)
+      const details = meta.filter(Boolean).join(' · ')
+      const auxiliary = call.kind.replace(/^aux:/, '')
+      const text = call.kind === 'main'
+        ? call.text || 'Hermes request'
+        : auxiliary === 'next_prompt' ? 'Preview the Conversation' : auxiliary.replace(/[_-]+/g, ' ')
       return h('li', { key: call.id },
         h('div', { className: 'harp-live-request' }, h('strong', { title: text }, text),
-          h('small', { className: 'harp-muted', title: meta.filter(Boolean).join(' · ') }, meta.filter(Boolean).join(' · '))),
-        h('div', { className: 'harp-live-target' }, h('strong', null, call.model),
+          h('small', { className: 'harp-muted', title: details }, details)),
+        h('div', { className: 'harp-live-target' }, h('strong', { title: call.model }, call.model),
           h('small', { className: 'harp-muted' }, ROUTER_LABEL[call.provider] || call.provider)))
     })))
 }
 
+function QuotaSettings({ onOpen, onWeights }) {
+  const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
+  const [meter, setMeter] = useState(quotaMeter)
+  return h('div', null, h(Section, { title: 'QUOTA SETTINGS' },
+    h('div', { className: 'harp-tools' },
+      h(QuotaNotice, { settingsOnly: true, defaultAuto: !!query.data?.settings?.apply }),
+      h('label', null, 'Quota display ', h('select', { value: meter, onChange: e => {
+        quotaMeter = e.target.value
+        setMeter(quotaMeter)
+        syncQuota()
+      } }, h('option', { value: 'bar' }, 'Progress bar'), h('option', { value: 'ring' }, 'Ring'))))),
+    h(Section, { title: 'ROUTING SETUP' },
+      h('div', { className: 'harp-tools' },
+        h(Button, { size: 'sm', onClick: onWeights }, 'Provider weights'),
+        h(Button, { size: 'sm', onClick: () => onOpen('delegation') }, 'Delegation'),
+        h(Button, { size: 'sm', onClick: () => onOpen('diagram') }, 'Diagram')),
+      h('label', { className: 'harp-field' }, 'Copy into a new Hermes chat',
+        h('textarea', { readOnly: true, rows: 5, value: 'Review my current HARP settings for Provider weights, Hermes Delegation and Diagram. Ask what outcomes I want, then propose the provider, agent and effort for each work type. Show the settings you would change and wait for my confirmation before saving.' }))))
+}
+
 function QuotaPane() {
-  const [meter, setMeter] = useState('bar')
+  const [, refreshMeter] = useState(0)
+  const meter = quotaMeter
   const [now, setNow] = useState(Date.now())
+  const [savingPlan, setSavingPlan] = useState(false)
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30000)
     return () => clearInterval(timer)
   }, [])
-  const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
+  useEffect(() => {
+    const listener = () => refreshMeter(value => value + 1)
+    quotaListeners.add(listener)
+    return () => quotaListeners.delete(listener)
+  }, [])
   const anthropic = useProviderAccounts('anthropic')
   const codex = useProviderAccounts('openai-codex')
+  const setDisplayPlan = async (id, plan) => {
+    setSavingPlan(true)
+    try {
+      await post('/pool/anthropic/display-plan', { id, plan })
+      await anthropic.refetch()
+    } catch (error) {
+      notify('error', `Could not save account plan: ${failure(error)}`)
+    } finally {
+      setSavingPlan(false)
+    }
+  }
   return h('div', { className: 'harp-quota-pane', style: { padding: 8, display: 'grid', gap: 8 } },
-    h('section', { className: 'harp-card' }, h('b', null, 'User Tracker'),
-      h(TrackerProvider, { title: 'Anthropic', query: anthropic, meter, now }),
+    h('section', { className: 'harp-card' }, h('b', null, 'User Tracker'), h('small', { className: 'harp-muted' }, ' · quota remaining'),
+      h(TrackerProvider, { title: 'Anthropic', query: anthropic, meter, now, setDisplayPlan, savingPlan }),
       h(TrackerProvider, { title: 'Codex', query: codex, meter, now })),
     h(LiveRouting),
-    h(QuotaNotice, { monitor: true }),
-    h('details', { className: 'harp-card' }, h('summary', null, 'Settings'),
-      h(QuotaNotice, { settingsOnly: true, defaultAuto: !!query.data?.settings?.apply }),
-      h('label', null, 'Quota display ', h('select', { value: meter, onChange: e => setMeter(e.target.value) },
-        h('option', { value: 'bar' }, 'Progress bar'), h('option', { value: 'ring' }, 'Ring')))))
+    h(QuotaNotice, { monitor: true }))
 }
 
 // Match the density, surfaces, and controls of the Accounts desktop page.
@@ -232,15 +281,24 @@ const CSS = `
 .harp-tracker-provider>summary{margin-bottom:4px}
 .harp-tracker-account{padding-left:4px;min-width:0;overflow-wrap:anywhere}
 .harp-tracker-account+.harp-tracker-account{border-top:1px solid var(--ui-stroke-tertiary);padding-top:5px}
+.harp-tracker-account>select{display:block;margin-top:2px;max-width:100%}
 .harp-tracker-account>b{display:block;font-size:.72rem;margin-bottom:1px}
-.harp-tracker-window{display:grid;grid-template-columns:minmax(75px,1fr) minmax(0,1.3fr);align-items:center;gap:6px;min-height:22px;font-size:.69rem}
+.harp-tracker-window{display:grid;grid-template-columns:minmax(75px,1fr) minmax(0,1.3fr);align-items:center;column-gap:6px;row-gap:1px;min-height:22px;font-size:.69rem}
+.harp-tracker-window:has(.harp-tracker-ring){min-height:38px}
 .harp-tracker-reset{grid-column:2;text-align:right;color:var(--ui-text-tertiary);margin:0 0 3px;font-variant-numeric:tabular-nums}
 .harp-live-calls{list-style:none;margin:3px 0 0;padding:0}
 .harp-live-calls li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr);align-items:start;gap:6px;padding:4px 0;font-size:.71rem}
+@media(prefers-reduced-motion:no-preference){
+.harp-live-calls li{animation:harp-live-arrival 220ms ease-out both}
+@keyframes harp-live-arrival{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+}
 .harp-live-calls li+li{border-top:1px solid var(--ui-stroke-tertiary)}
 .harp-live-request,.harp-live-target{min-width:0}
 .harp-live-request>*,.harp-live-target>*{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .harp-live-target{text-align:right}
+.harp-delegation-flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:8px;margin:8px 0;padding-left:20px}
+.harp-delegation-flow p{margin:4px 0 0}
+.harp-live-request>small{font-variant-numeric:tabular-nums}
 .harp-tracker-ring{justify-self:end;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;font-size:.65rem;background:radial-gradient(circle,var(--ui-bg-card) 57%,transparent 59%),conic-gradient(var(--ui-accent) var(--harp-quota-used),var(--ui-bg-quaternary) 0)}
 .harp-page{display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--ui-surface-background);color:var(--ui-text-secondary);font-size:.75rem}
 .harp-page *{box-sizing:border-box}
@@ -346,17 +404,17 @@ const CSS = `
 .harp-cand input,.harp-cand select,.harp-load select,.harp-tools select{font-size:.75rem}
 .harp-routing-controls{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin:10px 0 4px}
 .harp-routing-controls label{display:inline-flex;align-items:center;gap:5px}
-.harp-load{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;max-width:640px;margin-top:4px}
+.harp-load{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:6px;max-width:640px;margin-top:4px}
 .harp-load>div{border:1px solid var(--ui-stroke-tertiary);border-radius:6px;padding:4px 8px}
 .harp-load>div.hot{border-color:var(--ui-red)}
-.harp-load .acc{display:grid;grid-template-columns:minmax(0,1fr) 54px minmax(62px,92px);gap:5px;align-items:center;font-size:.6875rem;margin-top:2px}
+.harp-load .acc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,84px) minmax(0,88px);gap:5px;align-items:center;font-size:.6875rem;margin-top:2px}
 .harp-load .acc select{min-height:0;height:22px;padding-block:0}
 .harp-load .acc>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:560px){.harp-load{grid-template-columns:1fr}}
-.harp-pick{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:.75rem;margin-top:6px}
-.harp-pick i{font-style:normal;padding:2px 8px;border-radius:10px;border:1px solid var(--ui-stroke-tertiary)}
-.harp-pick i.hit{border-color:var(--ui-accent);background:color-mix(in srgb,var(--ui-accent) 15%,transparent)}
-.harp-pick s{opacity:.6}
+.harp-load .harp-select-wide{max-width:100%;min-width:0}
+.harp-load .harp-select-trigger>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.harp-load .harp-quota,.harp-tracker-window .harp-quota{min-width:0;gap:5px;font-variant-numeric:tabular-nums}
+.harp-load .harp-quota .harp-bar,.harp-tracker-window .harp-quota .harp-bar{flex:1 1 0;min-width:0}
+.harp-load .harp-quota>span:last-child,.harp-tracker-window .harp-quota>span:last-child{margin-left:auto}
 `
 
 // Dropdowns follow the Hermes theme through the SDK Select; a native <select> is the fallback.
@@ -393,11 +451,12 @@ function QueryState({ query, label }) {
   return null
 }
 
-function Meter({ percent, label }) {
+function Meter({ percent, label, remaining = false }) {
   if (!Number.isFinite(percent)) return h('span', { className: 'harp-muted' }, 'No reading')
   const safe = Math.max(0, Math.min(100, percent))
-  return h('div', { className: 'harp-quota', 'aria-label': `${label}: ${number.format(percent)}% used` },
-    h('span', { className: `harp-bar${safe >= 90 ? ' bad' : safe >= 75 ? ' warn' : ''}`, 'aria-hidden': true },
+  const used = remaining ? 100 - safe : safe
+  return h('div', { className: 'harp-quota', 'aria-label': `${label}: ${number.format(percent)}% ${remaining ? 'remaining' : 'used'}` },
+    h('span', { className: `harp-bar${used >= 90 ? ' bad' : used >= 75 ? ' warn' : ''}`, 'aria-hidden': true },
       h('i', { style: { width: `${safe}%` } })),
     h('span', null, `${number.format(percent)}%`))
 }
@@ -441,15 +500,18 @@ function RouterFlow({ decision, jev }) {
       decision && h('small', { className: 'harp-muted' }, decision.applied ? 'Apply mode' : 'Shadow recommendation')))
 }
 
-function RouterView({ onAddKey }) {
+function RouterView({ onAddKey, showWeights, onWeightsShown }) {
   const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
   const delegation = useQuery({ queryKey: [ID, 'delegation'], queryFn: () => rest('/delegation'), refetchInterval: 15000 })
   const [draft, setDraft] = useState(null)
   const [busy, setBusy] = useState('')
-  const [sample, setSample] = useState('')
-  const [tried, setTried] = useState(null)
   const [fixing, setFixing] = useState(null)
   const data = query.data
+  useEffect(() => {
+    if (!showWeights || !data) return
+    document.getElementById('harp-provider-weights')?.scrollIntoView({ block: 'start' })
+    onWeightsShown()
+  }, [data, showWeights, onWeightsShown])
   if (!data) return h(QueryState, { query, label: 'router' })
   const s = draft || data.settings
   const edit = changes => setDraft({ ...s, ...changes })
@@ -457,7 +519,6 @@ function RouterView({ onAddKey }) {
   const move = (i, d) => { const list = [...s.candidates]; [list[i], list[i + d]] = [list[i + d], list[i]]; edit({ candidates: list }) }
   const act = async (name, fn) => { setBusy(name); try { await fn() } catch (e) { notify('error', `${name}: ${failure(e)}`) } finally { setBusy('') } }
   const save = () => act('Save', async () => { await post('/router/settings', s); setDraft(null); notify('success', 'Router saved.'); query.refetch() })
-  const tryIt = useJev => act(useJev ? 'Ask Jev' : 'Try', async () => setTried((await post('/router/try', { text: sample, use_jev: useJev })).decision))
   const vote = (row, label) => act('Feedback', async () => { await post('/router/feedback', { id: row.id, label }); setFixing(null); notify('success', 'Learned.'); query.refetch() })
   const [cls, title, detail] = KEY_TEXT[data.jev.state] || KEY_TEXT.down
   const st = data.stats
@@ -491,7 +552,7 @@ function RouterView({ onAddKey }) {
           h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Remove ${i + 1}`, onClick: () => edit({ candidates: s.candidates.filter((_, j) => j !== i) }) }, h(Codicon, { name: 'trash', size: '0.8rem' }))))),
       h('div', { className: 'harp-tools' }, h(Button, { size: 'sm', variant: 'outline', onClick: () => edit({ candidates: [...s.candidates, { provider: 'anthropic', model: (data.models.anthropic || [''])[0], description: '', cap: 'medium' }] }) },
         h(Codicon, { name: 'add', size: '0.8rem' }), 'Add model'))),
-    h('section', { 'aria-label': 'Focus and provider load' },
+    h('section', { id: 'harp-provider-weights', 'aria-label': 'Focus and provider load' },
       h('div', { className: 'harp-routing-controls' },
         h('b', { title: { save: 'Small models first, light thinking.', balanced: 'Pick by the task, medium thinking at most.', best: 'Strongest when unsure, full thinking.' }[s.mode] }, 'Focus'),
         h(SegmentedControl, { options: [{ id: 'save', label: 'Save' }, { id: 'balanced', label: 'Balanced' }, { id: 'best', label: 'Best' }],
@@ -515,17 +576,6 @@ function RouterView({ onAddKey }) {
               } }),
             h(Meter, { percent: a.peak, label: `${a.label} usage` }))))
       }))),
-    h(Section, { title: 'TRY A MESSAGE' },
-      h('div', { className: 'harp-tools' },
-        h(Input, { value: sample, placeholder: 'Type anything…', 'aria-label': 'Try a message', onChange: e => setSample(e.target.value) }),
-        h(Button, { size: 'sm', variant: 'outline', disabled: !sample.trim() || !!busy, onClick: () => tryIt(false) }, 'Try'),
-        h(Button, { size: 'sm', variant: 'ghost', disabled: !sample.trim() || !!busy || data.jev.state !== 'ok', title: 'Spends one Jev call', onClick: () => tryIt(true) }, 'Ask Jev')),
-      tried && h('div', { className: 'harp-pick' },
-        h('span', null, tried.by === 'jev' ? 'Jev' : 'Local learner'),
-        tried.moved_from && h('s', null, shortId(tried.moved_from)),
-        h('i', { className: 'hit' }, `${ROUTER_LABEL[tried.pick.split(':')[0]]} · ${shortId(tried.pick)} · ${tried.effort}`),
-        h('span', { className: 'harp-muted' }, tried.unsure ? `not sure (${Math.round(tried.confidence * 100)}%): strongest model` : `sure ${Math.round(tried.confidence * 100)}%`),
-        tried.moved_from && h('span', { className: 'harp-muted' }, 'moved: the first pick\'s provider is near its limit'))),
     h(Section, { title: 'WHAT IT LEARNED' },
       h('div', { className: 'harp-cards' },
         h(SummaryCard, { title: 'Learned from', value: `${data.samples}`, detail: `messages · ${st.corrections_total} of them your corrections` }),
@@ -576,7 +626,16 @@ function DelegationView() {
     finally { setSaving(false) }
   }
   return h(Section, { title: 'HERMES DELEGATION' },
-    h('p', null, 'Hermes delegates with these routes when the harp delegation backend is selected. Jev sends the task goal to TypeSafe.'),
+    h('p', null, 'This flow applies when Hermes uses HARP as its delegation backend.'),
+    h('ol', { className: 'harp-delegation-flow', 'aria-label': 'How Hermes chooses a work route' },
+      h('li', { className: 'harp-card' }, h('strong', null, 'Named work'),
+        h('p', null, 'If the request names a saved work type, use that route directly.')),
+      h('li', { className: 'harp-card' }, h('strong', null, settings.classifier === 'jev' ? 'Jev with Local fallback' : 'Local matching'),
+        h('p', null, settings.classifier === 'jev'
+          ? 'Send the task goal to TypeSafe. If Jev is unavailable, try matching it locally.'
+          : 'Match the task goal against the saved work types on this device.')),
+      h('li', { className: 'harp-card' }, h('strong', null, 'Run the subagent'),
+        h('p', null, 'A match supplies its saved provider, agent and effort. If there is no match, Hermes uses its default route.'))),
     h('details', { className: 'harp-card' }, h('summary', null, 'Provider weighting'),
       h('p', null, 'Manual plan weights are set under Provider load in Diagram. Saved work routes use the provider you select.'),
       ...providers.flatMap(provider => (load.data?.accounts?.[provider] || []).map(account =>
@@ -1203,7 +1262,8 @@ function HarpPage() {
   const [busy, setBusy] = useState('')
   const [target, setTarget] = useState(null)
   const [lastProvider, setLastProvider] = useState('anthropic')
-  const diagram = ['diagram', 'summary', 'delegation'].includes(top)   // overview pages: no provider tools or views
+  const [showWeights, setShowWeights] = useState(false)
+  const diagram = ['diagram', 'summary', 'delegation', 'settings'].includes(top)   // overview pages: no provider tools or views
   const provider = diagram ? lastProvider : top
   const pickTop = value => { setTop(value); if (ACTION_PROVIDERS.includes(value)) setLastProvider(value) }
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
@@ -1236,7 +1296,7 @@ function HarpPage() {
       h('h1', { className: 'harp-title' }, 'HARP'),
       !diagram && accounts.data && h('span', { className: 'harp-pill' }, accounts.data.accounts.length),
       h(SegmentedControl, { options: [
-        { id: 'summary', label: 'Summary' }, { id: 'diagram', label: 'Diagram' }, { id: 'delegation', label: 'Delegation' }, { id: 'jev', label: 'Type-safe' }, { id: 'anthropic', label: 'anthropic' }, { id: 'openai-codex', label: 'Codex' }
+        { id: 'summary', label: 'Summary' }, { id: 'diagram', label: 'Diagram' }, { id: 'delegation', label: 'Delegation' }, { id: 'jev', label: 'Type-safe' }, { id: 'anthropic', label: 'anthropic' }, { id: 'openai-codex', label: 'Codex' }, { id: 'settings', label: 'Settings' }
       ], value: top, onChange: pickTop }),
       h('span', { className: 'harp-grow' }),
       !diagram && h(Button, { size: 'sm', variant: 'ghost', 'aria-label': 'Refresh', disabled: accounts.isFetching || usage.isFetching,
@@ -1250,7 +1310,7 @@ function HarpPage() {
         { id: 'report', label: 'Report' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }], value: view, onChange: setView }),
       view === 'usage' && h('span', null, accounts.data?.live_read_at ? `Live usage read ${stamp(accounts.data.live_read_at * 1000, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Live usage not read yet')),
     h('div', { className: 'harp-body' }, top === 'summary' ? h(SummaryView, { onOpen: pickTop })
-      : top === 'delegation' ? h(DelegationView) : diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
+      : top === 'delegation' ? h(DelegationView) : top === 'settings' ? h(QuotaSettings, { onOpen: pickTop, onWeights: () => { setShowWeights(true); pickTop('diagram') } }) : diagram ? h(RouterView, { onAddKey: () => pickTop('jev'), showWeights, onWeightsShown: () => setShowWeights(false) })
       : view === 'activity' ? h(ActivityView, { provider })
         : view === 'report' ? h(ReportView, { provider })
           : view === 'health' ? h(HealthView, { provider })

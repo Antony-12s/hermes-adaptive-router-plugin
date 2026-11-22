@@ -170,8 +170,10 @@ def get_accounts(provider: str):
         activity = pool_state.account_activity(_home() / "harp-activity.sqlite3", provider)
     except Exception:  # noqa: BLE001 - activity is informational
         activity = {}
+    display_plans = _engine().settings()["anthropic_display_plans"] if provider == "anthropic" else {}
     accounts = [
         {"id": entry.get("id"), "priority": entry.get("priority"),
+         "display_plan": display_plans.get(entry.get("id")),
          "label": entry.get("label") or "Unnamed account",
          "status": entry.get("last_status") or "active",
          "usage": readings.get(entry.get("id")),
@@ -195,6 +197,21 @@ def _target(body):
     if not entry_id:
         raise HTTPException(400, "Choose an account.")
     return provider, entry_id
+
+
+@router.post("/pool/anthropic/display-plan")
+def set_anthropic_display_plan(body: dict):
+    from hermes_cli.auth import read_credential_pool
+
+    account_id = body.get("id")
+    if not account_id or not any(entry.get("id") == account_id for entry in read_credential_pool("anthropic")
+                                 if isinstance(entry, dict)):
+        raise HTTPException(404, "Choose an existing Anthropic account.")
+    try:
+        _engine().set_anthropic_display_plan(account_id, body.get("plan"))
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    return {"ok": True}
 
 
 @router.post("/pool/park")
@@ -620,7 +637,7 @@ def save_delegation(body: dict):
 
 @router.post("/router/settings")
 def save_router(body: dict):
-    allowed = set(router_engine.router.DEFAULTS)
+    allowed = set(router_engine.router.DEFAULTS) - {"anthropic_display_plans"}
     changes = {k: v for k, v in (body or {}).items() if k in allowed}
     try:
         settings = _engine().save(changes)

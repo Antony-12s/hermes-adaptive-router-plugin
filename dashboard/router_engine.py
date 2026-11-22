@@ -45,7 +45,20 @@ class Engine:
         return router.load_settings(self.settings_path)
 
     def save(self, changes):
-        return router.save_settings(self.settings_path, {**self.settings(), **changes})
+        with self._lock:
+            return router.save_settings(self.settings_path, {**self.settings(), **changes})
+
+    def set_anthropic_display_plan(self, account_id, plan):
+        if plan is not None and plan not in router.ANTHROPIC_DISPLAY_PLANS:
+            raise ValueError("Choose a supported Anthropic plan.")
+        with self._lock:
+            settings = self.settings()
+            plans = settings["anthropic_display_plans"]
+            if plan is None:
+                plans.pop(account_id, None)
+            else:
+                plans[account_id] = plan
+            router.save_settings(self.settings_path, settings)
 
     def record_load(self, provider, peaks, plans=None):
         """Called after a usage read: {entry id: highest window percent}."""
