@@ -175,6 +175,7 @@ class Store:
                 moved_from TEXT, current TEXT, applied INTEGER DEFAULT 0, jev_ms INTEGER, feedback TEXT);
               CREATE TABLE IF NOT EXISTS samples (id INTEGER PRIMARY KEY, ts REAL, text TEXT, label TEXT,
                 difficulty INTEGER, weight REAL, source TEXT);
+              CREATE TABLE IF NOT EXISTS verified_routes (decision_id INTEGER PRIMARY KEY);
               CREATE TABLE IF NOT EXISTS jev_calls (day TEXT PRIMARY KEY, calls INTEGER);
               CREATE TABLE IF NOT EXISTS live_calls (id INTEGER PRIMARY KEY, ts REAL NOT NULL,
                 kind TEXT NOT NULL, text TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
@@ -224,6 +225,25 @@ class Store:
                        (time.time(), text, correct, round(difficulty or 0), 3.0, "user"))
         return correct
 
+    def verify_route(self, decision_id):
+        with self._db() as db, db:
+            row = db.execute("SELECT text, pick, difficulty FROM decisions WHERE id=?", (decision_id,)).fetchone()
+            if row is None:
+                raise KeyError(decision_id)
+            if db.execute("INSERT OR IGNORE INTO verified_routes VALUES (?)", (decision_id,)).rowcount:
+                text, pick, difficulty = row
+                db.execute("INSERT INTO samples (ts, text, label, difficulty, weight, source) VALUES (?,?,?,?,?,?)",
+                           (time.time(), text, pick, round(difficulty or 0), 2.0, "verified"))
+            return row[1]
+
+    def verified_route_for(self, task_group):
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT d.text, d.pick, d.effort FROM verified_routes v JOIN decisions d ON d.id=v.decision_id"
+                " WHERE d.feedback IS NULL OR d.feedback='ok' ORDER BY d.id DESC LIMIT 100"
+            ).fetchall()
+        return next(((pick, effort) for text, pick, effort in rows if task_group_for(text) == task_group), None)
+
     def learner(self, candidates):
         learner, difficulty = Learner(), Learner()
         for c in candidates:    # seed each option with its description so a fresh install still guesses
@@ -239,13 +259,14 @@ class Store:
         """Recent user-confirmed messages for one option: they go to Jev as examples."""
         with self._db() as db:
             return [r[0][:200] for r in db.execute(
-                "SELECT text FROM samples WHERE label=? AND source='user' ORDER BY ts DESC LIMIT ?", (label, limit))]
+                "SELECT text FROM samples WHERE label=? AND source IN ('user','verified') ORDER BY source='user' DESC, ts DESC LIMIT ?", (label, limit))]
 
     def recent(self, limit=20):
         with self._db() as db:
             rows = db.execute("SELECT id, ts, platform, text, pick, effort, by, confidence, moved_from, current,"
-                              " applied, feedback FROM decisions ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-        keys = ["id", "ts", "platform", "text", "pick", "effort", "by", "confidence", "moved_from", "current", "applied", "feedback"]
+                              " applied, feedback, EXISTS(SELECT 1 FROM verified_routes WHERE decision_id=decisions.id)"
+                              " FROM decisions ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        keys = ["id", "ts", "platform", "text", "pick", "effort", "by", "confidence", "moved_from", "current", "applied", "feedback", "verified"]
         return [dict(zip(keys, (*r[:3], (r[3] or "")[:120], *r[4:]))) for r in rows]
 
     def stats(self, days=7):
@@ -361,6 +382,37 @@ def decide(text, settings, learner, difficulty_learner, loads, jev=None, seeds=0
     return {"pick": pick, "label": label, "effort": effort, "by": by, "confidence": round(conf, 3),
             "probs": {k: round(v, 3) for k, v in probs.items()}, "difficulty": round(level, 2),
             "unsure": unsure, "moved_from": moved}
+
+
+def task_group_for(text):
+    """Group short weather lookups with known equivalent phrasing."""
+    normalized = re.sub(r"[?？.!]+$", "", " ".join(text.casefold().split())).strip()
+    if re.fullmatch(
+        r"(?:วันนี้\s*(?:สภาพ)?อากาศ(?:เป็น)?(?:อย่างไร|ยังไง)|"
+        r"วันนี้\s*ฝน(?:จะ)?ตก(?:ไหม|มั้ย)|"
+        r"(?:what(?:'s| is) the weather(?: like)?|(?:will it|is it going to) rain) today)"
+        r"(?:\s*(?:ครับ|คะ|ค่ะ))?", normalized
+    ):
+        return "weather_lookup"
+    return None
+
+
+def reusable_route(store, text, settings, loads):
+    task_group = task_group_for(text)
+    if not task_group:
+        return None
+    verified = store.verified_route_for(task_group)
+    if not verified:
+        return None
+    pick, effort = verified
+    candidate = next((item for item in settings["candidates"] if candidate_id(item) == pick), None)
+    if not candidate or effort not in EFFORTS:
+        return None
+    usage = loads.get(candidate["provider"]) or {}
+    if usage.get("pool_near_limit") or (not usage.get("pool_has_room") and usage.get("used", 0) >= settings["limit"]):
+        return None
+    cap = min(MODES[settings["mode"]]["cap"], EFFORTS.index(candidate.get("cap", "high")))
+    return pick, EFFORTS[min(EFFORTS.index(effort), cap)]
 
 
 def _length_level(text):

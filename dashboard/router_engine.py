@@ -142,7 +142,11 @@ class Engine:
         loads = self.loads(settings)
         local = router.decide(text, settings, learner, levels, loads, seeds=seeds)
         decision = local
-        if use_jev and local["unsure"] and self.jev_status()["state"] == "ok" \
+        verified = router.reusable_route(self.store, text, settings, loads)
+        if verified:
+            pick, effort = verified
+            decision = {**local, "pick": pick, "label": pick, "effort": effort, "unsure": False, "moved_from": None}
+        elif use_jev and local["unsure"] and self.jev_status()["state"] == "ok" \
                 and self.store.jev_calls_today() < settings["jev_daily_cap"]:
             decision = self._ask_jev(text, settings, learner, levels, loads, seeds) or local
         if log:

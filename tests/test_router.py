@@ -127,6 +127,41 @@ class LoadAndSettingsTests(unittest.TestCase):
 
 
 class StoreTests(unittest.TestCase):
+    def test_weather_paraphrases_reuse_verified_provider_model_and_effort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = router_engine.Engine(tmp)
+            engine.save({"candidates": CANDS})
+            prompt = "วันนี้สภาพอากาศเป็นยังไง"
+            paraphrase = "วันนี้ฝนตกไหม"
+            self.assertEqual(router.task_group_for(prompt), "weather_lookup")
+            self.assertEqual(router.task_group_for(paraphrase), "weather_lookup")
+            self.assertIsNone(router.task_group_for("แก้บั๊กหน้าพยากรณ์ วันนี้ฝนตกไหม"))
+            original = router.decide(prompt, settings(), router.Learner(),
+                                     router.Learner(), {}, jev("anthropic:haiku", level=0))
+            engine.store.verify_route(engine.store.log(original, prompt))
+            next_pick = engine.decide(paraphrase, log=False, use_jev=False)
+            self.assertEqual((next_pick["pick"], next_pick["effort"]), ("anthropic:haiku", "low"))
+            engine.record_load("anthropic", {"a": 100})
+            engine.record_load("openai-codex", {"b": 20})
+            next_pick = engine.decide(paraphrase, log=False, use_jev=False)
+            self.assertEqual(next_pick["pick"], "openai-codex:sol")
+
+    def test_verified_result_teaches_local_learner_only_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = router.Store(Path(tmp) / "r.sqlite3")
+            decision = router.decide("compare routing revisions", settings(), router.Learner(),
+                                     router.Learner(), {}, jev("anthropic:opus"))
+            decision["by"] = "local"
+            decision_id = store.log(decision, "compare routing revisions")
+            self.assertEqual(store.stats()["samples"], 0)
+            self.assertEqual(store.verify_route(decision_id), "anthropic:opus")
+            store.verify_route(decision_id)
+            self.assertEqual(store.stats()["samples"], 1)
+            self.assertEqual(store.recent()[0]["verified"], 1)
+            self.assertEqual(store.examples("anthropic:opus"), ["compare routing revisions"])
+            learner, _ = store.learner(CANDS)
+            self.assertEqual(learner.samples, 5)
+
     def test_jev_decisions_and_feedback_train_the_learner(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = router.Store(Path(tmp) / "r.sqlite3")

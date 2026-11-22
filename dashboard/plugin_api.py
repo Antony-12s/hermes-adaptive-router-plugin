@@ -664,6 +664,14 @@ def router_feedback(body: dict):
     return {"learned": correct}
 
 
+@router.post("/router/verify")
+def router_verify(body: dict):
+    try:
+        return {"learned": _engine().store.verify_route(int(body.get("id")))}
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "Unknown decision.")
+
+
 @router.post("/router/check-key")
 def router_check_key(body: dict | None = None):
     return {"jev": _engine().jev_status(force=True)}

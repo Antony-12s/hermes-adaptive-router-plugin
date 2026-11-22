@@ -22,9 +22,19 @@ HARP adds model routing, account quota monitoring, and subagent route settings t
 | Quota pane | Open provider accordions, see the current chat’s quota context, and inspect recent main and auxiliary model calls in Live Routing. |
 | Schedules and alerts | Schedule account parking and receive quota notifications through your desktop or Hermes Telegram channel. |
 
+## Requirements
+
+| Component | When you need it |
+| --- | --- |
+| [Hermes Agent](https://hermes-agent.nousresearch.com/) | Required. Use a Hermes release with [LLM request middleware](https://hermes-agent.nousresearch.com/docs/developer-guide/middleware) for Apply mode. Hermes Delegation also requires a release with delegation-provider support. |
+| [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop) | Required for the HARP desktop tabs, chat quota controls, and right-hand Quota pane. The Agent backend and browser admin dashboard can run without Desktop. |
+| Anthropic or OpenAI Codex | Sign in to the provider you want HARP to route or monitor. One configured provider is enough to get started. Comparing quota or switching between those providers requires both. |
+| Jev by TypeSafe | Optional. Add a Jev API key to enable Jev classification. The local learner works without one. |
+| Operating system | The same HARP package supports Windows, Linux, and macOS. See [Platform support](#platform-support) for timer and notification requirements. |
+
 ## Install
 
-1. Install Hermes Agent and sign in to the providers you want to use. Use a Hermes release that supports [LLM request middleware](https://hermes-agent.nousresearch.com/docs/developer-guide/middleware). For the HARP interface, install [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
+1. Install Hermes Agent and sign in to the provider you want to use. Install Hermes Desktop if you want the desktop controls.
 2. Run these commands from PowerShell on Windows or a terminal on Linux or macOS.
 
    ```text
@@ -64,6 +74,23 @@ flowchart TD
 2. In **Diagram**, select models that appear in your Hermes model picker, describe the tasks each handles, and set their effort ceilings. Leave **Heavyweight** on **Auto by quota** or choose a preferred model. Save your changes.
 3. Start in **Shadow** mode and send a normal Hermes chat message. Compare the recorded recommendation in **Diagram** with the request observed in **Quota → Live Routing**. Enable **Apply** when you are ready for HARP to change the model and effort within the chat’s current provider.
 4. In **Settings**, choose a progress bar or a ring for quota display and set the current chat’s auto-switch preference. For a quota warning, **Switch now** applies the offered route to the next message, and **Ignore** dismisses the warning. Hermes may require confirmation for a provider change.
+
+### Routing self-improvement
+
+HARP's local learner improves from Jev classifications and your feedback on real
+Hermes requests. In **Diagram → What it learned**, select **Verify result** after
+checking that the proposed model actually handled the task and passed your checks.
+A verified run becomes a stronger training example than an unreviewed Jev pick.
+Use **Right** or **Wrong** to rate or correct the route directly. HARP can send
+reviewed examples to Jev to guide later classifications.
+
+For recognized short weather lookups, HARP can reuse the verified provider,
+model, and effort across equivalent Thai or English phrasings. The active
+effort limits and provider quota still apply.
+
+A successful API response alone does not verify that the task succeeded. HARP
+learns which routes to recommend from these examples. It leaves model weights
+to the provider.
 
 ### Jev and delegation
 

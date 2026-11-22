@@ -510,6 +510,7 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
   const [draft, setDraft] = useState(null)
   const [busy, setBusy] = useState('')
   const [fixing, setFixing] = useState(null)
+  const [verifying, setVerifying] = useState(null)
   const data = query.data
   useEffect(() => {
     if (!showWeights || !data) return
@@ -524,6 +525,11 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
   const act = async (name, fn) => { setBusy(name); try { await fn() } catch (e) { notify('error', `${name}: ${failure(e)}`) } finally { setBusy('') } }
   const save = () => act('Save', async () => { await post('/router/settings', s); setDraft(null); notify('success', 'Router saved.'); query.refetch() })
   const vote = (row, label) => act('Feedback', async () => { await post('/router/feedback', { id: row.id, label }); setFixing(null); notify('success', 'Learned.'); query.refetch() })
+  const verify = row => act('Verify result', async () => {
+    await post('/router/verify', { id: row.id })
+    setVerifying(null)
+    await query.refetch()
+  })
   const [cls, title, detail] = KEY_TEXT[data.jev.state] || KEY_TEXT.down
   const st = data.stats
   return h('div', null,
@@ -596,13 +602,20 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
         ? h(Table, { label: 'Recent picks', headings: ['Message', 'Picked', 'By', 'Was on', ''], rows: data.recent.map(row => ({ key: row.id, cells: [
             h('span', { className: 'harp-status' }, row.text),
             `${shortId(row.pick)} · ${row.effort}`, row.by === 'jev' ? 'Jev' : 'local', row.current || '–',
+            h('div', null,
+              row.verified ? h('span', { className: 'harp-muted' }, 'Result verified')
+                : verifying === row.id
+                  ? h('div', null, 'Did this model handle the task and pass your checks? HARP can share verified examples with Jev when enabled.',
+                      h(Button, { size: 'sm', disabled: !!busy, onClick: () => verify(row) }, 'Confirm result'),
+                      h(Button, { size: 'sm', onClick: () => setVerifying(null) }, 'Cancel'))
+                  : h(Button, { size: 'sm', variant: 'ghost', onClick: () => setVerifying(row.id) }, 'Verify result'),
             row.feedback ? h('span', { className: 'harp-muted' }, row.feedback === 'ok' ? 'right' : `should be ${shortId(row.feedback)}`)
               : fixing === row.id
                 ? h(Pick, { value: '', placeholder: 'Should be…', label: `Correct pick: ${row.text}`, onChange: v => v && vote(row, v),
                     options: s.candidates.filter(c => candId(c) !== row.pick).map(c => ({ value: candId(c), label: shortId(candId(c)) })) })
                 : h('span', { className: 'harp-row-actions' },
                     h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Right pick: ${row.text}`, onClick: () => vote(row, '') }, h(Codicon, { name: 'thumbsup', size: '0.8rem' })),
-                    h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Wrong pick: ${row.text}`, onClick: () => setFixing(row.id) }, 'Wrong'))] })) })
+                    h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Wrong pick: ${row.text}`, onClick: () => setFixing(row.id) }, 'Wrong')))] })) })
         : h('div', { className: 'harp-empty' }, 'No messages routed yet. Shadow mode records a pick for each new message.')))
 }
 
