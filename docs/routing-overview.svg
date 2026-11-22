@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 258" role="img" aria-labelledby="title desc">
+  <title id="title">How HARP routes a Hermes request</title>
+  <desc id="desc">A Hermes message reaches the HARP router. Local or Jev classifies the request. HARP considers account quota and records its proposed provider, model and effort.</desc>
+  <rect width="960" height="258" rx="20" fill="#101a21"/>
+  <g font-family="system-ui, sans-serif">
+    <text x="32" y="52" fill="#eef6f7" font-size="30" font-weight="700">Hermes Adaptive Router Plugin</text>
+    <text x="33" y="81" fill="#b8c9ce" font-size="16">From a Hermes message to a route you can inspect</text>
+    <g fill="#192933" stroke="#49616c">
+      <rect x="32" y="120" width="194" height="99" rx="12"/>
+      <rect x="256" y="120" width="204" height="99" rx="12"/>
+      <rect x="490" y="120" width="194" height="99" rx="12"/>
+      <rect x="714" y="120" width="214" height="99" rx="12"/>
+    </g>
+    <path d="M231 169h19m-7-5 7 5-7 5m222-5h19m-7-5 7 5-7 5m205-5h19m-7-5 7 5-7 5" fill="none" stroke="#76d9b4" stroke-width="2" stroke-linecap="round"/>
+    <g fill="#f0f7f8" font-size="18" font-weight="650">
+      <text x="48" y="154">Hermes message</text>
+      <text x="272" y="154">Classify the request</text>
+      <text x="506" y="154">Check quota</text>
+      <text x="730" y="154">Record the route</text>
+    </g>
+    <g fill="#b8c9ce" font-size="14">
+      <text x="48" y="186">Your normal chat</text>
+      <text x="272" y="186">Local learner or Jev</text>
+      <text x="506" y="186">Provider account pools</text>
+      <text x="730" y="186">Provider, model and effort</text>
+    </g>
+  </g>
+</svg>
