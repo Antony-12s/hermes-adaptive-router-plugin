@@ -37,9 +37,28 @@ HARP adds model routing, account quota monitoring, and subagent route settings t
 
 Use the same Hermes profile for installation, provider authentication, and the gateway. This repository ships one plugin for Windows, Linux, and macOS.
 
-## Set up HARP
+## How routing works
 
-![Routing flow from a Hermes message to provider, model, and effort](docs/routing-overview.svg)
+```mermaid
+flowchart TD
+    A["Send a message in Hermes"] --> B["HARP's local learner suggests a route"]
+    B --> C{"Unsure and Jev available?"}
+    C -->|Yes| D["Ask Jev for a model and difficulty score"]
+    C -->|No| E["Use the local recommendation"]
+    D -->|Result available| F["Check model limits and provider quota"]
+    D -->|No result| E
+    E --> F
+    F --> G["Record the proposed provider, model and effort in Diagram"]
+    G --> H{"Apply is on and the provider matches?"}
+    H -->|Yes| I["Hermes applies the selected model and effort if supported"]
+    H -->|No| J["Hermes uses the chat's current route"]
+    I --> K["Live Routing shows the observed model call"]
+    J --> K
+```
+
+**Diagram** shows what HARP proposed. **Live Routing** shows the model Hermes actually called. In Shadow mode, HARP records its recommendation and Hermes continues with the chat's current route. A cross-provider quota switch is handled separately for a later message.
+
+## Set up HARP
 
 1. In **Anthropic** or **Codex**, use **Add account** if needed and **Live usage** to refresh quota readings. If Hermes omits an Anthropic plan, you can select a display plan for that account in **Quota → User Tracker**. Set routing weights separately in **Diagram → Provider load**.
 2. In **Diagram**, select models that appear in your Hermes model picker, describe the tasks each handles, and set their effort ceilings. Leave **Heavyweight** on **Auto by quota** or choose a preferred model. Save your changes.
