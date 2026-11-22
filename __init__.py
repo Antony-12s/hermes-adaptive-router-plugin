@@ -251,6 +251,13 @@ def _setup_cli(parser):
 def register(ctx):
     ctx.register_hook("post_api_request", track_account)
     ctx.register_hook("pre_llm_call", route_turn)
+    if hasattr(ctx, "register_delegation_provider"):
+        try:
+            provider = _sibling("delegation").backend(_engine)
+        except ImportError:
+            pass  # Older Hermes builds can still use the main-chat router.
+        else:
+            ctx.register_delegation_provider(provider)
     if hasattr(ctx, "register_middleware"):
         ctx.register_middleware("llm_request", apply_turn_route)
     if hasattr(ctx, "register_cli_command"):

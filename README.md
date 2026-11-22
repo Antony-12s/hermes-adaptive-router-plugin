@@ -99,6 +99,29 @@ python -B -m unittest discover -s tests -v
 
 The Diagram tab routes each new message to a provider, model and effort.
 
+### Hermes Delegation
+
+Add work types in **HARP → Delegation**, choose their provider, agent and
+effort, and select **Save delegation**. On Hermes versions that support
+delegation providers, set `delegation.backend: harp` in the Hermes profile
+and start a new session. Hermes still creates and runs each subagent.
+Unmatched tasks use the Hermes default route. **Local** is the default
+classifier. Selecting **Jev** sends the delegated goal and work descriptions
+to TypeSafe, uses the same daily Jev allowance as the Router, and falls back
+to Local if Jev is unavailable. Diagram shows the latest route HARP returned
+to Hermes, which may differ from what ultimately runs if Hermes falls back.
+
+In **Provider weighting**, HARP shows the plan reported by the account usage
+API when available. Anthropic Max 5× or 20× is weighted automatically when
+the API identifies that exact tier. Unknown plans and Codex use a default
+weight of ×1. Change that weight in Diagram if needed. An explicit saved
+work route takes precedence over provider weighting.
+
+Open or close the **Quota** pane with the Hermes sidebar controls. **User
+Tracker** shows recent provider load, **Routing** shows the last HARP router
+pick, and **Settings** switches the quota display between **Progress bar**
+and **Ring**.
+
 In Hermes Desktop, HARP shows a quota notice under the focused chat composer
 and in the right-hand **HARP quota** pane. A provider needs fresh readings
 showing that its available accounts are near the limit before HARP suggests

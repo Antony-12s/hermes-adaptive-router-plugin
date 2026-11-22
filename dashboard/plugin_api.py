@@ -38,6 +38,7 @@ pool_state = _sibling("pool_state")
 timer = _sibling("harp_timer")
 typesafe = _sibling("typesafe")
 router_engine = _sibling("router_engine")
+delegation = _sibling("delegation")
 
 POOL_LOCK = threading.Lock()
 LIVE = {}            # provider -> {"read_at": epoch, "accounts": {entry id: reading}}
@@ -105,6 +106,7 @@ def _read_usage(provider, entry):
 def _reading(snapshot):
     peak = actions.account_peak(snapshot)
     return {
+        "plan": str(getattr(snapshot, "plan", "") or "")[:80],
         "peak": peak[0] if peak else None,
         "windows": [{
             "label": w.label,
@@ -128,11 +130,22 @@ def _read_all(provider, pool):
     LIVE[provider] = {"read_at": time.time(), "accounts": readings}
     if provider not in contract.KEY_PROVIDERS:
         try:   # the router's load view: weighted by each account's plan
-            _engine().record_load(provider, {
+            eligible = {
                 entry.id: readings.get(entry.id, {}).get("peak") for entry in pool.entries()
                 if getattr(entry, "last_status", None) not in ("dead", "exhausted")
                 and getattr(entry, "last_error_reason", None) != "parked"
-            })
+            }
+            detected = {}
+            if provider == "anthropic":
+                for account in eligible:
+                    plan = readings.get(account, {}).get("plan", "").casefold().replace("×", "x").replace(" ", "")
+                    for suffix, weight in (("20x", "x20"), ("5x", "x5")):
+                        if "max" in plan and suffix in plan:
+                            detected[account] = weight
+                            break
+            _engine().record_load(provider, eligible, detected)
+            for account, weight in detected.items():
+                readings[account]["weight"] = weight
         except Exception:  # noqa: BLE001 - load is advisory
             pass
     return snapshots
@@ -576,9 +589,28 @@ def get_router():
             entries = _pool(provider).entries()
         except Exception:  # noqa: BLE001
             entries = []
-        accounts[provider] = [{"id": e.id, "label": e.label or e.id, "peak": (readings.get(e.id) or {}).get("peak")}
+        accounts[provider] = [{"id": e.id, "label": e.label or e.id, "peak": (readings.get(e.id) or {}).get("peak"),
+                               "plan": (readings.get(e.id) or {}).get("plan"),
+                               "weight": (readings.get(e.id) or {}).get("weight")}
                               for e in entries if getattr(e, "last_status", None) != "dead"]
     return {**status, "accounts": accounts, "models": {p: _models(p) for p in ROUTER_PROVIDERS}}
+
+
+@router.get("/delegation")
+def get_delegation():
+    return {"settings": delegation.settings(_home()),
+            "latest": delegation.read(_home(), "harp-delegation-latest.json", None),
+            "models": {provider: _models(provider) for provider in delegation.PROVIDERS}}
+
+
+@router.post("/delegation")
+def save_delegation(body: dict):
+    try:
+        settings = delegation.validate(body)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(400, str(error)) from error
+    delegation.write(_home(), "harp-delegation.json", settings)
+    return {"settings": settings}
 
 
 @router.post("/router/settings")

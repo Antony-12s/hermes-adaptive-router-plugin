@@ -47,13 +47,13 @@ class Engine:
     def save(self, changes):
         return router.save_settings(self.settings_path, {**self.settings(), **changes})
 
-    def record_load(self, provider, peaks):
+    def record_load(self, provider, peaks, plans=None):
         """Called after a usage read: {entry id: highest window percent}."""
         try:
             data = json.loads(self.load_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             data = {}
-        data[provider] = {"at": self._clock(), "peaks": peaks}
+        data[provider] = {"at": self._clock(), "peaks": peaks, "detected_plans": plans or {}}
         self.load_path.write_text(json.dumps(data), encoding="utf-8")
 
     def loads(self, settings=None):
@@ -67,7 +67,8 @@ class Engine:
         for provider, readings in fresh.items():
             peaks = readings.get("peaks") or {}
             known = {account: peak for account, peak in peaks.items() if peak is not None}
-            load = router.provider_load(known, settings["plans"].get(provider, {}))
+            plans = {**(readings.get("detected_plans") or {}), **settings["plans"].get(provider, {})}
+            load = router.provider_load(known, plans)
             if load is not None:
                 quota_fresh = 0 <= self._clock() - readings["at"] <= 600
                 load["pool_near_limit"] = quota_fresh and len(known) == len(peaks) and min(known.values()) >= settings["limit"]
@@ -94,6 +95,21 @@ class Engine:
     def _jev_key(self):
         entries = [e for e in self._jev_entries() if getattr(e, "last_status", None) != "dead"]
         return (entries[0].runtime_api_key, entries[0].runtime_base_url or typesafe.BASE_URL) if entries else (None, None)
+
+    def classify_delegation(self, goal, options):
+        settings = self.settings()
+        key, base_url = self._jev_key()
+        if not key or self.store.jev_calls_today() >= settings["jev_daily_cap"]:
+            return None
+        criteria = {label: f"{job['name']}: {job['description']}" for label, job in options.items()}
+        criteria["none"] = "No configured task matches the goal."
+        self.store.count_jev_call()
+        answers, _ = self._ask(key, goal[:router.TEXT_KEEP], {"route": {
+            "type": "choice", "instructions": "Which configured work type matches this delegated goal?",
+            "criteria": criteria,
+        }}, model=settings["jev_model"], base_url=base_url)
+        selected = answers.get("route")
+        return selected.get("choice") if isinstance(selected, dict) else None
 
     # ---------------------------------------------------------------- deciding
     def learners(self, settings):

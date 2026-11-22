@@ -108,6 +108,37 @@ test('the focused chat can ignore, toggle and explicitly apply its quota route',
   ])
 })
 
+test('Delegation saves a manual work route and Diagram shows the Hermes result', async () => {
+  const app = fixture({ configured: false, usage: [] })
+  const job = { name: 'Review PR', description: 'Review a proposed change', provider: 'openai-codex',
+    model: 'gpt-6-sol', effort: 'medium' }
+  app.results.delegation = { data: { settings: { classifier: 'local', jobs: [job] },
+    models: { anthropic: ['opus'], 'openai-codex': ['gpt-6-sol'] },
+    latest: { job: job.name, provider: job.provider, model: job.model, reasoning_effort: 'medium', source: 'manual' } }, refetch() {} }
+  app.results.router = { data: routerData(), refetch() {} }
+  button(app, app.render(), 'Delegation').props.onClick()
+  const tree = app.render()
+  const effort = app.nodes(tree, node => node.type === 'select' && node.props['aria-label'] === 'Work effort 1')[0]
+  effort.props.onChange({ target: { value: 'high' } })
+  await button(app, app.render(), 'Save delegation').props.onClick()
+  const request = app.requests.find(item => item.path === '/delegation' && item.method === 'POST')
+  assert.equal(request.body.jobs[0].model, 'gpt-6-sol')
+  assert.equal(request.body.jobs[0].effort, 'high')
+  button(app, app.render(), 'Diagram').props.onClick()
+  assert.match(app.text(app.render()), /LATEST HERMES DELEGATION.*Review PR.*Manual/)
+})
+
+test('Quota pane displays tracker and routing together and can show a ring', () => {
+  const app = fixture({})
+  app.results.router = { data: routerData(), refetch() {} }
+  const before = app.renderQuota('quota-pane')
+  assert.match(app.text(before), /User Tracker.*Routing.*Settings/)
+  const style = app.nodes(before, node => node.type === 'select')[0]
+  style.props.onChange({ target: { value: 'ring' } })
+  const rings = app.nodes(app.renderQuota('quota-pane'), node => node.props?.role === 'meter')
+  assert.ok(rings.some(node => node.props['aria-valuenow'] === 91))
+})
+
 test('HARP toolbar exposes its own account actions without invoking account-pool', () => {
   const app = fixture({ configured: false, usage: [] })
   const page = app.render()
@@ -316,7 +347,7 @@ test('top row picks Diagram or a provider; the second row holds the five views',
   const app = fixture({ configured: false, usage: [] })
   const page = app.render()
   const groups = JSON.parse(JSON.stringify(app.nodes(page, n => n.props?.role === 'group').map(g => g.children.map(b => b.children[0]))))
-  assert.deepEqual(groups[0], ['Summary', 'Diagram', 'Type-safe', 'anthropic', 'Codex'])
+  assert.deepEqual(groups[0], ['Summary', 'Diagram', 'Delegation', 'Type-safe', 'anthropic', 'Codex'])
   assert.deepEqual(groups[1], ['Accounts & usage', 'Activity', 'Report', 'Health', 'Alerts'])
   app.results.router = { data: routerData(), refetch() {} }
   tab(app, 'Diagram').props.onClick()

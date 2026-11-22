@@ -107,7 +107,7 @@ function refreshQuotaReadings() {
   }
 }
 
-function QuotaNotice({ monitor = false } = {}) {
+function QuotaNotice({ monitor = false, settingsOnly = false, defaultAuto = false } = {}) {
   const [, update] = useState(0)
   useEffect(() => {
     const listener = () => update(value => value + 1)
@@ -115,26 +115,59 @@ function QuotaNotice({ monitor = false } = {}) {
     return () => quotaListeners.delete(listener)
   }, [])
   const notice = focusNotice()
+  const session = quotaNotices.get(focusedChat()) === notice && notice ? focusedChat()
+    : quotaNotices.get(storedChat()) === notice && notice ? storedChat() : focusedChat()
+  const auto = notice?.auto ?? quotaChoices.get(session) ?? defaultAuto
+  const autoSwitch = h(Button, { size: 'sm', role: 'switch', 'aria-checked': auto,
+    disabled: !session || notice?.switching, onClick: () => {
+      for (const id of [session, focusedChat(), storedChat()]) if (id) quotaChoices.set(id, !auto)
+      if (notice) {
+        notice.auto = !auto
+        notice.deadline = Date.now() + quotaDelay
+      }
+      syncQuota()
+      scheduleQuota()
+    } }, auto ? 'Auto-switch on' : 'Auto-switch off')
+  if (settingsOnly) return autoSwitch
   if (!notice || notice.ignored) return monitor ? h('p', null, 'No quota warning for this chat.') : null
   const busy = notice.switching || !!host.state?.busyBySession?.get?.()?.[focusedChat()]
-  const toggle = () => {
-    notice.auto = !notice.auto
-    quotaChoices.set(quotaNotices.get(focusedChat()) === notice ? focusedChat() : storedChat(), notice.auto)
-    notice.deadline = Date.now() + quotaDelay
-    syncQuota()
-    scheduleQuota()
-  }
   return h('div', { role: 'status', style: { padding: '8px', fontSize: '.75rem' } },
     h('div', null, notice.status || `${notice.provider} pool is near its quota limit (${notice.used}% used).`),
     notice.pick && h('div', null, `${notice.pick.provider} · ${notice.pick.model} · ${notice.pick.effort}`),
     notice.pick && h(Button, { size: 'sm', disabled: busy, onClick: () => switchQuota(notice) }, 'Switch now'),
-    notice.pick && h(Button, { size: 'sm', role: 'switch', 'aria-checked': notice.auto, disabled: notice.switching, onClick: toggle },
-      notice.auto ? 'Auto-switch on' : 'Auto-switch off'),
+    !monitor && notice.pick && autoSwitch,
     h(Button, { size: 'sm', variant: 'ghost', disabled: notice.switching, onClick: () => {
       notice.ignored = true
       cancelQuotaTimer()
       syncQuota()
     } }, 'Ignore'))
+}
+
+function QuotaPane() {
+  const [meter, setMeter] = useState('bar')
+  const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
+  const last = query.data?.recent?.[0]
+  const [provider, ...model] = (last?.pick || '').split(':')
+  return h('div', { className: 'harp-quota-pane', style: { padding: 8, display: 'grid', gap: 8 } },
+    h('section', { className: 'harp-card' }, h('b', null, 'User Tracker'),
+      ...Object.entries(query.data?.loads || {}).filter(([, load]) => load).map(([name, load]) =>
+        h('div', { key: name, style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 } },
+          h('span', null, ROUTER_LABEL[name] || name),
+          meter === 'ring' ? h('span', { role: 'meter', 'aria-label': `${name} quota used`, 'aria-valuemin': 0,
+            'aria-valuemax': 100, 'aria-valuenow': load.used, style: { display: 'grid', placeItems: 'center',
+              width: 36, height: 36, borderRadius: '50%', fontSize: '.65rem',
+              background: `radial-gradient(circle, var(--ui-bg-card) 57%, transparent 59%),conic-gradient(var(--ui-accent) ${load.used}%,var(--ui-bg-quaternary) 0)` } },
+            `${load.used}%`) : h(Meter, { percent: load.used, label: `${name} quota used` }))),
+      !Object.values(query.data?.loads || {}).some(Boolean) && h('p', null, 'No recent quota readings.')),
+    h('section', { className: 'harp-card' }, h('b', null, 'Routing'),
+      last ? h('dl', null, h('dt', null, 'Provider'), h('dd', null, ROUTER_LABEL[provider] || provider),
+        h('dt', null, 'Agent'), h('dd', null, model.join(':')), h('dt', null, 'Effort'), h('dd', null, last.effort))
+        : h('p', null, 'No HARP routing decision yet.')),
+    h(QuotaNotice, { monitor: true }),
+    h('details', { className: 'harp-card' }, h('summary', null, 'Settings'),
+      h(QuotaNotice, { settingsOnly: true, defaultAuto: !!query.data?.settings?.apply }),
+      h('label', null, 'Quota display ', h('select', { value: meter, onChange: e => setMeter(e.target.value) },
+        h('option', { value: 'bar' }, 'Progress bar'), h('option', { value: 'ring' }, 'Ring')))))
 }
 
 // Match the density, surfaces, and controls of the Accounts desktop page.
@@ -241,11 +274,15 @@ const CSS = `
 }
 .harp-cand{display:grid;grid-template-columns:22px 130px minmax(140px,1fr) minmax(160px,2fr) 92px auto;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
 .harp-cand input,.harp-cand select,.harp-load select,.harp-tools select{font-size:.75rem}
-.harp-load{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-top:4px}
-.harp-load>div{border:1px solid var(--ui-stroke-tertiary);border-radius:8px;padding:8px 10px}
+.harp-routing-controls{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin:10px 0 4px}
+.harp-routing-controls label{display:inline-flex;align-items:center;gap:5px}
+.harp-load{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;max-width:640px;margin-top:4px}
+.harp-load>div{border:1px solid var(--ui-stroke-tertiary);border-radius:6px;padding:4px 8px}
 .harp-load>div.hot{border-color:var(--ui-red)}
-.harp-load .acc{display:grid;grid-template-columns:minmax(0,1fr) 72px 110px;gap:8px;align-items:center;font-size:.6875rem;margin-top:5px}
+.harp-load .acc{display:grid;grid-template-columns:minmax(0,1fr) 54px minmax(62px,92px);gap:5px;align-items:center;font-size:.6875rem;margin-top:2px}
+.harp-load .acc select{min-height:0;height:22px;padding-block:0}
 .harp-load .acc>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:560px){.harp-load{grid-template-columns:1fr}}
 .harp-pick{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:.75rem;margin-top:6px}
 .harp-pick i{font-style:normal;padding:2px 8px;border-radius:10px;border:1px solid var(--ui-stroke-tertiary)}
 .harp-pick i.hit{border-color:var(--ui-accent);background:color-mix(in srgb,var(--ui-accent) 15%,transparent)}
@@ -336,6 +373,7 @@ function RouterFlow({ decision, jev }) {
 
 function RouterView({ onAddKey }) {
   const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
+  const delegation = useQuery({ queryKey: [ID, 'delegation'], queryFn: () => rest('/delegation'), refetchInterval: 15000 })
   const [draft, setDraft] = useState(null)
   const [busy, setBusy] = useState('')
   const [sample, setSample] = useState('')
@@ -367,6 +405,8 @@ function RouterView({ onAddKey }) {
         ? h(Button, { size: 'sm', variant: 'outline', onClick: onAddKey }, 'Add Jev API key')
         : h(Button, { size: 'sm', variant: 'ghost', disabled: !!busy, onClick: () => act('Check', async () => { await post('/router/check-key', {}); query.refetch() }) }, 'Check now')),
     h(Section, { title: 'LATEST ROUTED MESSAGE' }, h(RouterFlow, { decision: data.recent[0], jev: data.jev })),
+    delegation.data?.latest && h(Section, { title: 'LATEST HERMES DELEGATION' },
+      h(DelegatedResult, { result: delegation.data.latest })),
     h(Section, { title: 'MODELS IT CAN PICK' },
       h('div', { className: 'harp-tools' }, 'Strongest first: when unsure it uses the top one. The description tells Jev and the learner what each is for.'),
       ...s.candidates.map((c, i) => h('div', { className: 'harp-cand', key: candId(c) + i },
@@ -381,21 +421,28 @@ function RouterView({ onAddKey }) {
           h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Remove ${i + 1}`, onClick: () => edit({ candidates: s.candidates.filter((_, j) => j !== i) }) }, h(Codicon, { name: 'trash', size: '0.8rem' }))))),
       h('div', { className: 'harp-tools' }, h(Button, { size: 'sm', variant: 'outline', onClick: () => edit({ candidates: [...s.candidates, { provider: 'anthropic', model: (data.models.anthropic || [''])[0], description: '', cap: 'medium' }] }) },
         h(Codicon, { name: 'add', size: '0.8rem' }), 'Add model'))),
-    h(Section, { title: 'FOCUS' }, h(SegmentedControl, { options: [{ id: 'save', label: 'Save' }, { id: 'balanced', label: 'Balanced' }, { id: 'best', label: 'Best' }],
-      value: s.mode, onChange: value => edit({ mode: value }) }),
-      h('span', { className: 'harp-muted' }, { save: ' Small models first, light thinking.', balanced: ' Pick by the task, medium thinking at most.', best: ' Strongest when unsure, full thinking.' }[s.mode])),
-    h(Section, { title: 'PROVIDER LOAD' },
-      h('div', { className: 'harp-tools' }, 'Set each account\'s plan once. Work moves away from a provider above ',
-        h(Pick, { value: String(s.limit), label: 'Load limit', options: [70, 80, 85, 90, 95].map(v => ({ value: String(v), label: `${v}%` })), onChange: v => edit({ limit: Number(v) }) })),
+    h('section', { 'aria-label': 'Focus and provider load' },
+      h('div', { className: 'harp-routing-controls' },
+        h('b', { title: { save: 'Small models first, light thinking.', balanced: 'Pick by the task, medium thinking at most.', best: 'Strongest when unsure, full thinking.' }[s.mode] }, 'Focus'),
+        h(SegmentedControl, { options: [{ id: 'save', label: 'Save' }, { id: 'balanced', label: 'Balanced' }, { id: 'best', label: 'Best' }],
+          value: s.mode, onChange: value => edit({ mode: value }) }),
+        h('label', null, 'Provider load limit',
+          h(Pick, { value: String(s.limit), label: 'Load limit', options: [70, 80, 85, 90, 95].map(v => ({ value: String(v), label: `${v}%` })), onChange: v => edit({ limit: Number(v) }) }))),
       h('div', { className: 'harp-load' }, ...Object.keys(ROUTER_LABEL).map(provider => {
         const load = data.loads[provider]
         const hot = load && load.used >= s.limit
         return h('div', { key: provider, className: hot ? 'hot' : '' },
           h('div', { className: 'harp-account' }, h('b', null, ROUTER_LABEL[provider]), h('span', { className: 'harp-grow' }),
             h('span', { className: 'harp-muted' }, !load ? 'no usage read yet' : hot ? `${load.used}% used: near its limit` : `${load.used}% used`)),
-          ...(data.accounts[provider] || []).map(a => h('div', { className: 'acc', key: a.id }, h('span', null, a.label),
-            h(Pick, { value: (s.plans[provider] || {})[a.id] || 'x1', label: `Plan: ${a.label}`, wide: true, options: ['x1', 'x5', 'x20'],
-              onChange: v => edit({ plans: { ...s.plans, [provider]: { ...(s.plans[provider] || {}), [a.id]: v } } }) }),
+          ...(data.accounts[provider] || []).map(a => h('div', { className: 'acc', key: a.id }, h('span', { title: a.label }, a.label),
+            h(Pick, { value: (s.plans[provider] || {})[a.id] || 'auto', label: `Plan: ${a.label}`, wide: true,
+              options: [{ value: 'auto', label: `Auto · ${a.weight || 'x1'}` }, 'x1', 'x5', 'x20'],
+              onChange: v => {
+                const plans = { ...(s.plans[provider] || {}) }
+                if (v === 'auto') delete plans[a.id]
+                else plans[a.id] = v
+                edit({ plans: { ...s.plans, [provider]: plans } })
+              } }),
             h(Meter, { percent: a.peak, label: `${a.label} usage` }))))
       }))),
     h(Section, { title: 'TRY A MESSAGE' },
@@ -428,6 +475,61 @@ function RouterView({ onAddKey }) {
                     h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Right pick: ${row.text}`, onClick: () => vote(row, '') }, h(Codicon, { name: 'thumbsup', size: '0.8rem' })),
                     h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Wrong pick: ${row.text}`, onClick: () => setFixing(row.id) }, 'Wrong'))] })) })
         : h('div', { className: 'harp-empty' }, 'No messages routed yet. Shadow mode records a pick for each new message.')))
+}
+
+function DelegatedResult({ result }) {
+  return h('div', { className: 'harp-card' },
+    h('strong', null, result.job), h('span', null, ` · ${({ jev: 'Jev', local: 'Local', manual: 'Manual' })[result.source] || 'Hermes'}`),
+    h('div', null, `Provider: ${ROUTER_LABEL[result.provider] || result.provider} · Agent: ${result.model} · Effort: ${result.reasoning_effort}`))
+}
+
+function DelegationView() {
+  const query = useQuery({ queryKey: [ID, 'delegation'], queryFn: () => rest('/delegation'), refetchInterval: 15000 })
+  const load = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 60000 })
+  const [draft, setDraft] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [status, setStatus] = useState('')
+  if (!query.data) return h(QueryState, { query, label: 'delegation' })
+  const settings = draft || query.data.settings
+  const providers = ['anthropic', 'openai-codex']
+  const changeJob = (index, fields) => setDraft({ ...settings, jobs: settings.jobs.map((job, i) => i === index ? { ...job, ...fields } : job) })
+  const models = provider => query.data.models[provider] || []
+  const save = async () => {
+    setSaving(true)
+    setStatus('')
+    try {
+      await post('/delegation', settings)
+      await query.refetch()
+      setDraft(null)
+      setStatus('Saved for Hermes Delegation.')
+    } catch (error) { setStatus(`Save failed: ${failure(error)}`) }
+    finally { setSaving(false) }
+  }
+  return h(Section, { title: 'HERMES DELEGATION' },
+    h('p', null, 'Hermes delegates with these routes when the harp delegation backend is selected. Jev sends the task goal to TypeSafe.'),
+    h('details', { className: 'harp-card' }, h('summary', null, 'Provider weighting'),
+      h('p', null, 'Manual plan weights are set under Provider load in Diagram. Saved work routes use the provider you select.'),
+      ...providers.flatMap(provider => (load.data?.accounts?.[provider] || []).map(account =>
+        h('div', { key: `${provider}:${account.id}` }, `${ROUTER_LABEL[provider]} · ${account.label} · ${account.plan || 'Unknown plan'} · ${load.data.settings?.plans?.[provider]?.[account.id] || account.weight || 'x1'}`)))),
+    h('div', { className: 'harp-tools' }, h('label', null, 'Classifier ',
+      h(Pick, { label: 'Delegation classifier', value: settings.classifier,
+        options: [{ value: 'local', label: 'Local' }, { value: 'jev', label: 'Jev with Local fallback' }],
+        onChange: classifier => setDraft({ ...settings, classifier }) }))),
+    h('div', { className: 'harp-tools' },
+      h(Button, { size: 'sm', disabled: saving, onClick: () => setDraft({ ...settings, jobs: [...settings.jobs,
+        { name: '', description: '', provider: providers[0], model: models(providers[0])[0] || '', effort: 'medium' }] }) }, 'Add work'),
+      h(Button, { size: 'sm', disabled: !draft || saving, onClick: save }, saving ? 'Saving…' : 'Save delegation'),
+      status && h('span', { role: 'status' }, status)),
+    ...settings.jobs.map((job, i) => h('fieldset', { key: i, className: 'harp-card' },
+      h('legend', null, job.name || 'New work'),
+      h('div', { className: 'harp-tools' },
+        h(Input, { 'aria-label': `Work name ${i + 1}`, placeholder: 'Work name', value: job.name, maxLength: 70, onChange: e => changeJob(i, { name: e.target.value }) }),
+        h(Input, { 'aria-label': `Work description ${i + 1}`, placeholder: 'When this route should be used', value: job.description, maxLength: 300, onChange: e => changeJob(i, { description: e.target.value }) }),
+        h(Pick, { label: `Work provider ${i + 1}`, value: job.provider, options: providers, onChange: provider => changeJob(i, { provider, model: models(provider)[0] || '' }) }),
+        h(Pick, { label: `Work agent ${i + 1}`, value: job.model, options: [...new Set([job.model, ...models(job.provider)])], onChange: model => changeJob(i, { model }) }),
+        h(Pick, { label: `Work effort ${i + 1}`, value: job.effort, options: ['low', 'medium', 'high'], onChange: effort => changeJob(i, { effort }) }),
+        h(Button, { size: 'sm', variant: 'ghost', onClick: () => setDraft({ ...settings, jobs: settings.jobs.filter((_, index) => index !== i) }) }, 'Remove work')))),
+    query.data.latest && h(DelegatedResult, { result: query.data.latest }))
 }
 
 function RowActions({ row, canAct, onAction }) {
@@ -1029,9 +1131,9 @@ function HarpPage() {
   const [busy, setBusy] = useState('')
   const [target, setTarget] = useState(null)
   const [lastProvider, setLastProvider] = useState('anthropic')
-  const diagram = top === 'diagram' || top === 'summary'   // overview pages: no provider tools or views
+  const diagram = ['diagram', 'summary', 'delegation'].includes(top)   // overview pages: no provider tools or views
   const provider = diagram ? lastProvider : top
-  const pickTop = value => { setTop(value); if (value !== 'diagram' && value !== 'summary') setLastProvider(value) }
+  const pickTop = value => { setTop(value); if (ACTION_PROVIDERS.includes(value)) setLastProvider(value) }
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
   const usage = useQuery({ queryKey: [ID, 'usage'], queryFn: () => rest('/usage'), refetchInterval: 60000 })
   const canAct = ACTION_PROVIDERS.includes(provider)
@@ -1062,7 +1164,7 @@ function HarpPage() {
       h('h1', { className: 'harp-title' }, 'HARP'),
       !diagram && accounts.data && h('span', { className: 'harp-pill' }, accounts.data.accounts.length),
       h(SegmentedControl, { options: [
-        { id: 'summary', label: 'Summary' }, { id: 'diagram', label: 'Diagram' }, { id: 'jev', label: 'Type-safe' }, { id: 'anthropic', label: 'anthropic' }, { id: 'openai-codex', label: 'Codex' }
+        { id: 'summary', label: 'Summary' }, { id: 'diagram', label: 'Diagram' }, { id: 'delegation', label: 'Delegation' }, { id: 'jev', label: 'Type-safe' }, { id: 'anthropic', label: 'anthropic' }, { id: 'openai-codex', label: 'Codex' }
       ], value: top, onChange: pickTop }),
       h('span', { className: 'harp-grow' }),
       !diagram && h(Button, { size: 'sm', variant: 'ghost', 'aria-label': 'Refresh', disabled: accounts.isFetching || usage.isFetching,
@@ -1075,7 +1177,8 @@ function HarpPage() {
       h(SegmentedControl, { options: [{ id: 'usage', label: 'Accounts & usage' }, { id: 'activity', label: 'Activity' },
         { id: 'report', label: 'Report' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }], value: view, onChange: setView }),
       view === 'usage' && h('span', null, accounts.data?.live_read_at ? `Live usage read ${stamp(accounts.data.live_read_at * 1000, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Live usage not read yet')),
-    h('div', { className: 'harp-body' }, top === 'summary' ? h(SummaryView, { onOpen: pickTop }) : diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
+    h('div', { className: 'harp-body' }, top === 'summary' ? h(SummaryView, { onOpen: pickTop })
+      : top === 'delegation' ? h(DelegationView) : diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
       : view === 'activity' ? h(ActivityView, { provider })
         : view === 'report' ? h(ReportView, { provider })
           : view === 'health' ? h(HealthView, { provider })
@@ -1131,8 +1234,8 @@ export default {
       { id: 'nav', area: SIDEBAR_NAV_AREA, order: 56, data: { path: ROUTE, label: 'HARP', codicon: 'graph' } },
       { id: 'open', area: PALETTE_AREA, data: { id: 'harp.open', label: 'HARP: accounts and usage', keywords: ['harp', 'router', 'usage'], run: () => host.navigate(ROUTE) } },
       ...(sdk.COMPOSER_AREAS?.underside ? [{ id: 'quota-notice', area: sdk.COMPOSER_AREAS.underside, render: () => h(QuotaNotice) }] : []),
-      { id: 'quota-pane', area: 'panes', title: 'HARP quota', data: { placement: 'right', width: '320px' },
-        render: () => h(QuotaNotice, { monitor: true }) }
+      { id: 'quota-pane', area: 'panes', title: 'Quota', data: { placement: 'right', width: '320px' },
+        render: () => h(QuotaPane) }
     ])
   }
 }
