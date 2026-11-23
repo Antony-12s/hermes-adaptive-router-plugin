@@ -41,7 +41,7 @@ MODE_SURE = {"save": 0.55, "balanced": 0.70, "best": 0.85}
 DEMANDING_TIER = 3        # a heavyweight preference applies from this tier up
 # Softmax temperature of the tier learner, chosen by cross-validation on the training prompts (training/train.py).
 # At the router's default of 60 the learner was sure about only 40 of 100 held-out prompts and over-routed 37.
-LEARNER_TEMPERATURE = 400.0
+LEARNER_TEMPERATURE = 800.0   # grouped cross-validation on routing-seeds + tier-extra with task-group prototypes
 UNSURE_TIER = 3           # where an unsure learner with no information lands: Opus at medium
 COMPARE_TIER = 2          # from this tier up, the provider with more quota left runs the job
 LABELS = tuple(str(t) for t in range(len(TIERS)))

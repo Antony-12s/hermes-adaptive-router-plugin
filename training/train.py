@@ -15,6 +15,7 @@ from dashboard import ladder, router
 from training.generate_dataset import expected_route
 
 DATASET = Path(__file__).with_name("routing-seeds.jsonl")
+EXTRA = Path(__file__).with_name("tier-extra.jsonl")    # tier-only rows (no quota scenario), see README
 LABELS = [str(t) for t in range(len(ladder.TIERS))]
 TEMPERATURES = (10, 20, 30, 60, 100, 150, 250, 400, 800)
 FOLDS = 5
@@ -27,6 +28,15 @@ BASELINES = {                                # fixed routes to compare cost agai
 
 def load_rows(path=DATASET):
     return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def load_extra(path=EXTRA):
+    return load_rows(path) if Path(path).exists() else []
+
+
+PROBES = (("เสร็จยัง", 0), ("ได้ยินไหม", 0), ("ขอบคุณมาก", 0), ("thanks!", 0), ("ถึงไหนแล้ว", 0),
+          ("สรุปให้หน่อย", 1), ("สลับที่กัน", 2), ("ลดลงเหลือ 4 พอ", 2),
+          ("แก้บั๊กปุ่มบันทึกส่งคำขอสองครั้ง", 3), ("ออกแบบระบบ sync ข้ามหลายเครื่องพร้อมแผน migration", 4))
 
 
 def build_loads(scenario):
@@ -53,21 +63,13 @@ def target(row, mode):
 def train_learner(rows):
     learner = router.Learner()
     for row in rows:
-        learner.learn(row["prompt"], str(row["tier"]))
+        learner.learn(row["prompt"], str(row["tier"]), group=row["task_group"])
     return learner
 
 
 def scores(learner, text):
     """Cosine score per tier. These do not depend on temperature, so cross-validation computes them once."""
-    query, qnorm = learner._vector(router._features(text))
-    out = {}
-    for label in LABELS:
-        if not learner.counts[label]:
-            out[label] = 0.0
-            continue
-        centroid, cnorm = learner._vector(learner.counts[label])
-        out[label] = sum(v * centroid.get(g, 0.0) for g, v in query.items()) / (qnorm * cnorm)
-    return out
+    return learner.label_scores(text, LABELS)
 
 
 def probs_at(score, temperature):
@@ -110,9 +112,11 @@ def main():
     parser.add_argument("--dataset", default=str(DATASET))
     parser.add_argument("--temperature", type=float, default=None, help="skip cross-validation and use this value")
     parser.add_argument("--show", type=int, default=5, help="how many mismatches to print")
+    parser.add_argument("--no-extra", action="store_true", help="train on routing-seeds.jsonl only")
     args = parser.parse_args()
     rows = load_rows(args.dataset)
-    train_rows = [r for r in rows if r["split"] == "train"]
+    extra = [] if args.no_extra else load_extra()
+    train_rows = [r for r in rows + extra if r["split"] == "train"]
     held_out = [r for r in rows if r["split"] == "evaluation"]
 
     if args.temperature:
@@ -164,6 +168,20 @@ def main():
         print(f"  {name}: {fixed_cost:.1f}, so the ladder costs {100 * (cost_ladder / n / fixed_cost - 1):+.0f}%")
     for miss in misses[:args.show]:
         print("  miss", *miss)
+
+    extra_held = [r for r in extra if r["split"] == "evaluation"]
+    if extra_held:
+        hits, near_hits, per = 0, 0, defaultdict(lambda: [0, 0])
+        for row in extra_held:
+            tier = ladder.predict_tier(learner, row["prompt"], args.mode)[0]
+            truth = min(row["tier"], ladder.MODE_TOP_TIER[args.mode])
+            hits += tier == truth
+            near_hits += abs(tier - truth) <= 1
+            per[truth][0] += tier == truth
+            per[truth][1] += 1
+        print(f"Extra held-out (tier only): exactly right {hits}/{len(extra_held)}, within one tier {near_hits}/{len(extra_held)}")
+        print("  " + "  ".join(f"tier {t}: {h}/{n}" for t, (h, n) in sorted(per.items())))
+    print("Probes: " + "  ".join(f"{text} {want}->{ladder.predict_tier(learner, text, args.mode)[0]}" for text, want in PROBES))
 
     # Provider policy alone: every row, perfect tier.
     policy_hits, cases, policy_misses = 0, defaultdict(lambda: [0, 0]), []

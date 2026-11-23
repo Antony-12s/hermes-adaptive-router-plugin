@@ -25,7 +25,7 @@ class SeedTests(unittest.TestCase):
         rows = train.load_rows()
         with tempfile.TemporaryDirectory() as home:
             seed.seed(home, rows)
-            texts = {text for text, label, weight in router_engine.Engine(home).store.tier_samples(ladder.LABELS)}
+            texts = {text for text, *_ in router_engine.Engine(home).store.tier_samples(ladder.LABELS)}
             held_out = {r["prompt"] for r in rows if r["split"] == "evaluation"}
             self.assertFalse(texts & held_out)
 

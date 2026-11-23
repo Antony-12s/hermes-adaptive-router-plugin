@@ -79,6 +79,26 @@ Every row carries one of 13 scenario cases (quota ahead for either provider, pla
 one or both providers out of room, no or partial quota data, and preferences with healthy or exhausted
 providers). Each work type sees every case.
 
+## Extra tier rows
+
+[tier-extra.jsonl](tier-extra.jsonl) adds about 1,440 prompts that teach the tier only. They have no quota
+scenario, so the provider policy checks above still use the 500 rows alone. They were written by language
+models in six batches, each told to imitate real chat with a coding assistant: status pings and thanks
+(`status_ack`, tier 0), short follow-up edits like "สลับที่กัน" (`followup_edit`, tiers 1-2), questions and
+writing (tiers 0-2), hard coding work (tier 3), deep investigations and designs (tier 4), and messy input with
+typos or text typed on the wrong keyboard layout (`messy`, tiers 0-3). Duplicates of the 500 rows were dropped.
+Rows written together share a `template` (ten rows each) and every fifth template is held out, so the extra
+held-out score also measures unfamiliar batches. `provenance` is `synthetic-llm`; the tiers were set by the
+writing model and spot-checked, not reviewed row by row.
+
+Bare option picks and go-aheads ("1", "ข้อ 2", "ok", "ต่อเลย", "ทำหมดเลย") are left out on purpose. Their cost
+is whatever the previous turn offered, so the router gives them the tier of the same session's last decision
+(within six hours) instead of guessing from the words; see `router.is_followup`.
+
+The learner keeps one centroid per task group (a prototype) and a tier scores as its best prototype. With one
+centroid per tier, short edit commands were averaged with long explanations in tier 2 and a short Thai command
+landed nearer the trivial centroid.
+
 ## Run training explicitly
 
 From the repository root with Python 3 installed, run:
@@ -87,7 +107,8 @@ From the repository root with Python 3 installed, run:
 python -m training.train --mode balanced
 ```
 
-The command trains a temporary local learner on the 400 training prompts. It first picks the learner's softmax
+The command trains a temporary local learner on the 400 training prompts plus the extra training rows
+(`--no-extra` for the 400 alone). It first picks the learner's softmax
 temperature by 5-fold cross-validation on the training rows, grouped by template, so the 100 held-out prompts
 are scored once and never used for tuning. The loss counts a prompt sent to too weak a model as twice as bad
 as one sent to too strong a model. It runs offline, keeps the learner in memory, and leaves Hermes profiles and
@@ -129,7 +150,7 @@ python -m training.seed
 ```
 
 A fresh HARP install knows nothing, so every message lands on tier 3 (Opus 5.5 at medium) until Jev or your
-corrections teach it. `training.seed` copies the 400 training prompts into your Hermes profile's router database
+corrections teach it. `training.seed` copies the 400 training prompts and the extra training rows into your Hermes profile's router database
 as low-weight samples marked `seed`, so the learner starts with a spread of easy and hard work. Held-out prompts
 are never copied, repeating the command adds nothing, and the plugin never runs it on its own. The prompts are
 synthetic, so your own corrections and verified runs outweigh them. Pass `--home` to use another profile.

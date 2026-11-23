@@ -42,8 +42,8 @@ def seed(home, rows, dry_run=False):
         for row in rows:
             if row["split"] != "train" or row["prompt"] in known:
                 continue
-            db.execute("INSERT INTO samples (ts, text, label, difficulty, weight, source) VALUES (?,?,?,?,?,?)",
-                       (time.time(), row["prompt"], str(row["tier"]), row["tier"], SEED_WEIGHT, "seed"))
+            db.execute("INSERT INTO samples (ts, text, label, difficulty, weight, source, grp) VALUES (?,?,?,?,?,?,?)",
+                       (time.time(), row["prompt"], str(row["tier"]), row["tier"], SEED_WEIGHT, "seed", row["task_group"]))
             added += 1
     return added
 
@@ -54,7 +54,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="count what would be added without writing")
     args = parser.parse_args()
     home = Path(args.home) if args.home else default_home()
-    count = seed(home, train.load_rows(), args.dry_run)
+    count = seed(home, train.load_rows() + train.load_extra(), args.dry_run)
     print(f"{'Would add' if args.dry_run else 'Added'} {count} seed prompts to {home / 'harp-router.sqlite3'}")
 
 

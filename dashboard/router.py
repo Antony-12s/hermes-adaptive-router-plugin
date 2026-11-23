@@ -42,6 +42,24 @@ DEFAULTS = {
     ],
 }
 TEXT_KEEP = 2000
+# A bare choice or go-ahead ("1", "ข้อ 2", "ok", "ต่อเลย", "ทำหมดเลย") says nothing about the work it starts:
+# that is whatever the previous turn offered, so the engine reuses the session's last tier instead of guessing.
+_FOLLOWUP_FILLER = re.compile(r"ครับ|คับ|ค่ะ|คะ|นะ|จ้า|จ้ะ|เลย|สิ|ซิ|ดิ|ด้วย|หน่อย|อ่ะ|อะ|เคมะ|มะ|please|pls|plz")
+_FOLLOWUP_WORD = (r"(?:(?:(?:pick|take|go with) )?(?:the )?(?:first|second|third|fourth|last) (?:one|option)|(?:เอา|ทำ|เลือก|option|choice|pick|take)?\s*(?:option |ข้อ|no\.?)?\s*\d{1,2}|[a-d]|ok(?:ay)?|k|yes|yep|yeah|sure|go(?: ahead)?|"
+                  r"do it|do all|all|both|continue|proceed|next|ship it|ต่อไป|ทำต่อ|ต่อ|ลุย|จัดไป|จัด|ทำเลย|เอาเลย|ได้เลย|ตกลง|"
+                  r"โอเคร?|เค|ทำหมด|เอาหมด|ทั้งหมด|ทั้งสองอย่าง|ทั้งคู่|สาดไป|สมาชิก|ใช่|ช่าย|ได้|แก้|เเก้|ทำ)")
+_FOLLOWUP = re.compile(rf"{_FOLLOWUP_WORD}(?:(?:\s+(?:(?:และ|กับ|and)\s+)?|\s*(?:และ|กับ|and)\s*){_FOLLOWUP_WORD})*")
+
+
+def is_followup(text):
+    """True for a bare option pick or go-ahead whose cost depends on the previous turn, not on its words."""
+    text = (text or "").strip().casefold()
+    if not text or len(text) > 40:
+        return False
+    text = re.sub(r"[\s,.!?;:+&/()\[\]'\"-]+", " ", _FOLLOWUP_FILLER.sub(" ", text)).strip()
+    return bool(text) and _FOLLOWUP.fullmatch(text) is not None
+
+
 MIN_SAMPLES = 30          # the local learner's confidence is damped until it has seen this many
 
 
@@ -111,19 +129,24 @@ class Learner:
     """TF-IDF centroids over character n-grams (works for Thai, which has no spaces).
 
     An option scores by cosine similarity to everything it was taught; an option with no data
-    scores 0, so it never wins by default. Softmax turns scores into probabilities."""
+    scores 0, so it never wins by default. Softmax turns scores into probabilities.
+
+    Rows taught with a group get their own centroid (a prototype) and an option scores as its best
+    prototype. One centroid per tier mixed short edit commands with long explanations, so a short Thai
+    command sat closer to the trivial centroid than to its own tier."""
 
     TEMPERATURE = 60.0    # tuned on the 500-prompt routing dataset: ~98% of confident picks are right
 
     def __init__(self):
         self.counts, self.docs, self.df, self.n = defaultdict(Counter), Counter(), Counter(), 0
 
-    def learn(self, text, label, weight=1.0):
+    def learn(self, text, label, weight=1.0, group=""):
+        key = f"{label}|{group}" if group else label
         grams = _features(text)
         for gram, count in grams.items():
-            self.counts[label][gram] += count * weight
+            self.counts[key][gram] += count * weight
         self.df.update(grams.keys())
-        self.docs[label] += weight
+        self.docs[key] += weight
         self.n += 1
 
     @property
@@ -138,18 +161,23 @@ class Learner:
         norm = math.sqrt(sum(v * v for v in vector.values())) or 1.0
         return vector, norm
 
+    def label_scores(self, text, labels):
+        """Cosine score per label: the best of the label's prototypes, 0 for a label with no data."""
+        query, qnorm = self._vector(_features(text))
+        scores = dict.fromkeys(labels, 0.0)
+        for key, counts in list(self.counts.items()):
+            label = key.split("|", 1)[0]
+            if label not in scores or not counts:
+                continue
+            centroid, cnorm = self._vector(counts)
+            scores[label] = max(scores[label], sum(v * centroid.get(g, 0.0) for g, v in query.items()) / (qnorm * cnorm))
+        return scores
+
     def predict(self, text, labels, seeds=0):
         """Probabilities over `labels` and a confidence damped by how much real data exists."""
         if not labels:
             return {}, 0.0
-        query, qnorm = self._vector(_features(text))
-        scores = {}
-        for label in labels:
-            if not self.counts[label]:
-                scores[label] = 0.0
-                continue
-            centroid, cnorm = self._vector(self.counts[label])
-            scores[label] = sum(v * centroid.get(g, 0.0) for g, v in query.items()) / (qnorm * cnorm)
+        scores = self.label_scores(text, labels)
         top = max(scores.values())
         exp = {l: math.exp(self.TEMPERATURE * (s - top)) for l, s in scores.items()}
         total = sum(exp.values())
@@ -188,6 +216,8 @@ class Store:
                 tokens INTEGER NOT NULL DEFAULT 0, requests INTEGER NOT NULL DEFAULT 0, price REAL NOT NULL DEFAULT 0);
             """)
             db.execute("INSERT OR IGNORE INTO running_total (id, since) VALUES (1, ?)", (time.time(),))
+            if "grp" not in {row[1] for row in db.execute("PRAGMA table_info(samples)")}:    # task group, for prototypes
+                db.execute("ALTER TABLE samples ADD COLUMN grp TEXT NOT NULL DEFAULT ''")
 
     def _db(self):
         return closing(sqlite3.connect(self.path))
@@ -244,11 +274,19 @@ class Store:
             raise KeyError(decision_id)
         return {"pick": row[0], "effort": row[1], "difficulty": row[2]}
 
+    def last_route(self, session, since):
+        """(pick, effort) of the session's latest routing decision after `since`, or None."""
+        if not session:
+            return None
+        with self._db() as db:
+            return db.execute("SELECT pick, effort FROM decisions WHERE session=? AND ts>? ORDER BY id DESC LIMIT 1",
+                              (session, since)).fetchone()
+
     def tier_samples(self, labels):
         """(text, label, weight) rows taught under a difficulty tier label."""
         with self._db() as db:
             marks = ",".join("?" * len(labels))
-            return db.execute(f"SELECT text, label, weight FROM samples WHERE label IN ({marks})", tuple(labels)).fetchall()
+            return db.execute(f"SELECT text, label, weight, grp FROM samples WHERE label IN ({marks})", tuple(labels)).fetchall()
 
     def feedback(self, decision_id, label, sample_label=None):
         """label = the candidate id that should have been used ("" = the pick was right).
