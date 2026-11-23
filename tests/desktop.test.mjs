@@ -32,6 +32,7 @@ function fixture(usage, session = {}) {
       state: session.id ? {
         focusedSessionId: { get: () => session.id },
         busyBySession: { get: () => ({ [session.id]: session.busy }), listen: fn => { busyListener = fn } },
+        focusedUsage: { get: () => session.usage ?? null, listen: () => () => {} },
       } : undefined },
     sdk: { COMPOSER_AREAS: { underside: 'composer.underside' } },
     setTimeout, clearTimeout, setInterval, clearInterval,
@@ -132,9 +133,9 @@ test('Delegation saves a manual work route and Diagram shows the Hermes result',
 })
 
 test('context card shows tokens, percent, the auto-compress mark and Compress now', (t) => {
-  const app = fixture({ configured: false, usage: [] }, { id: 's1', busy: false })
+  const app = fixture({ configured: false, usage: [] }, { id: 's1', busy: false,
+    usage: { context_used: 124000, context_max: 200000, context_percent: 62, compressions: 2 } })
   t.after(app.dispose)
-  app.results.context = { data: { context_used: 124000, context_max: 200000, context_percent: 62, compressions: 2 }, refetch() {} }
   app.results.compression = { data: { enabled: true, threshold: 0.75, presets: [0.5, 0.6, 0.75, 0.85] }, refetch() {} }
   const pane = app.renderQuota('quota-pane')
   const text = app.text(pane)
@@ -149,12 +150,12 @@ test('context card shows tokens, percent, the auto-compress mark and Compress no
   assert.equal(compress[0].props.disabled, false)
   compress[0].props.onClick()
   assert.ok(app.requests.some(r => r.op === 'session.compress' && r.session_id === 's1'))
+  assert.ok(!app.requests.some(r => r.op === 'session.usage'), 'session.usage is not available to desktop plugins')
 })
 
 test('context card says so when Hermes has not reported a window, and disables Compress while busy', (t) => {
   const app = fixture({ configured: false, usage: [] }, { id: 's1', busy: true })
   t.after(app.dispose)
-  app.results.context = { data: { context_used: 0 }, refetch() {} }
   app.results.compression = { data: { enabled: false }, refetch() {} }
   const pane = app.renderQuota('quota-pane')
   assert.match(app.text(pane), /Not reported yet/)

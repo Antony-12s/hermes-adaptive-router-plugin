@@ -113,8 +113,12 @@ const tokenCount = count => count >= 1e6 ? `${(count / 1e6).toFixed(1).replace(/
 function ContextCard({ session, working }) {
   const [compressing, setCompressing] = useState(false)
   const [note, setNote] = useState('')
-  const usage = useQuery({ queryKey: [ID, 'context', session], enabled: !!session, refetchInterval: 5000,
-    queryFn: () => host.request('session.usage', { session_id: session }) })
+  // session.usage is not a desktop plugin RPC ("unknown method"); the desktop keeps the focused chat's
+  // usage, context fields included, in host.state.focusedUsage.
+  const readUsage = () => host.state?.focusedUsage?.get?.() || null
+  const [usageData, setUsageData] = useState(readUsage())
+  useEffect(() => host.state?.focusedUsage?.listen?.(() => setUsageData(readUsage())), [])
+  const usage = { data: usageData || readUsage() }
   const settings = useQuery({ queryKey: [ID, 'compression'], queryFn: () => rest('/compression'), refetchInterval: 60000 })
   if (!session) return h('div', null, h('strong', null, 'Context'), h('div', { className: 'harp-muted' }, 'Open a chat to see its context.'))
   const used = usage.data?.context_used
@@ -133,7 +137,7 @@ function ContextCard({ session, working }) {
       setNote(failure(error))
     } finally {
       setCompressing(false)
-      usage.refetch()
+      setUsageData(readUsage())
     }
   }
   return h('div', null,
