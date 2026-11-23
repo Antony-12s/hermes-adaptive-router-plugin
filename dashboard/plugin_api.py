@@ -37,6 +37,7 @@ relay_mod = _sibling("signin_relay")
 pool_state = _sibling("pool_state")
 timer = _sibling("harp_timer")
 typesafe = _sibling("typesafe")
+anthropic_plan = _sibling("anthropic_plan")
 router_engine = _sibling("router_engine")
 delegation = _sibling("delegation")
 
@@ -127,6 +128,8 @@ def _read_all(provider, pool):
             continue
         snapshots[entry.id] = _read_usage(provider, entry)
         readings[entry.id] = _reading(snapshots[entry.id])
+        if provider == "anthropic" and not readings[entry.id]["plan"]:   # Hermes' usage API has no plan
+            readings[entry.id]["plan"] = anthropic_plan.fetch_plan(entry.runtime_api_key) or ""
     LIVE[provider] = {"read_at": time.time(), "accounts": readings}
     if provider not in contract.KEY_PROVIDERS:
         try:   # the router's load view: weighted by each account's plan
