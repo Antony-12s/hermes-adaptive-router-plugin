@@ -17,7 +17,7 @@ function fixture(usage, session = {}) {
   const results = [
     { data: { accounts: [{ id: 'acc-1', label: 'Personal', status: 'ok', tokens_24h: 32500000, used_by: [], usage: { peak: 68, windows: [
       { label: 'Current session', used_percent: 0, reset_at: null },
-      { label: 'Current week', used_percent: 68, reset_at: '2026-11-24T06:00:00+07:00' }] } }],
+      { label: 'Current week', used_percent: 68, reset_at: new Date(Date.now() + (2 * 24 + 7) * 3600000 + 60000).toISOString() }] } }],
       windows: [{ label: '5h', used_percent: 25, reset_at: null }], live_read_at: 1 }, refetch() {} },
     { data: usage, refetch() {} }
   ]
@@ -603,9 +603,9 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   button(app, page, 'Month').props.onClick()
   page = app.render()
   cells = app.nodes(page, n => n.props?.className?.startsWith('harp-gb-cell'))
-  // Full weeks covering a rolling 30-day window: between 30 and 36 cells, always a multiple of 7,
+  // Full weeks covering a rolling 30-day window: between 30 and 42 cells (6 weeks when the window starts on a Sunday), always a multiple of 7,
   // with exactly (total - 30) dashed pad cells — exact counts shift with which weekday "today" is.
-  assert.ok(cells.length % 7 === 0 && cells.length >= 30 && cells.length <= 36, cells.length)
+  assert.ok(cells.length % 7 === 0 && cells.length >= 30 && cells.length <= 42, `month cells: ${cells.length}`)
   const dashed = cells.filter(c => c.props.className.includes('dashed'))
   assert.equal(dashed.length, cells.length - 30)
   const today = cells.find(c => c.props.className.includes('ring'))
