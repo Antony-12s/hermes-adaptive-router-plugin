@@ -544,6 +544,7 @@ function routerData(over = {}) {
 function routerPage(data = routerData()) {
   const app = fixture({ configured: false, usage: [] })
   app.results.router = { data, refetch() {} }
+  app.results.delegation = { data: { settings: { classifier: 'local', jobs: [] }, models: {}, latest: null }, refetch() {} }
   app.slots[0] = 'diagram'
   return app
 }
@@ -551,8 +552,12 @@ function routerPage(data = routerData()) {
 test('diagram shows the router: key state, flow, candidates, load and learning', () => {
   const app = routerPage()
   const text = app.text(app.render())
-  for (const part of [/Jev API found/, /Tony/, /Jev Thinking/, /Provider/, /Agent/, /Effort/, /gpt-6-sol/, /Shadow/, /91%/, /near its limit/, /why does the app crash/, /9 of 12/])
+  for (const part of [/Jev API found/, /Tony/, /Jev Thinking/, /Provider/, /Agent/, /Effort/, /gpt-6-sol/, /Shadow/, /why does the app crash/, /9 of 12/])
     assert.match(text, part)
+  assert.doesNotMatch(text, /Provider load limit/, 'focus and provider load moved to Delegation')
+  app.slots[0] = 'delegation'
+  const delegation = app.text(app.render())
+  for (const part of [/HERMES DELEGATION/, /Provider load limit/, /91%/, /near its limit/]) assert.match(delegation, part)
 })
 
 const LADDER = {
@@ -564,17 +569,20 @@ const LADDER = {
   }))
 }
 
-test('with the cost ladder on, Diagram shows the ladder, provider-only heavyweight and tier corrections', async () => {
+test('with the cost ladder on, Delegation shows the ladder and provider-only heavyweight; Diagram keeps the switch', async () => {
   const base = routerData()
   const app = routerPage(routerData({ ladder: LADDER, settings: { ...base.settings, ladder: true, heavyweight: '' } }))
-  let page = app.render()
-  const text = app.text(page)
+  app.slots[0] = 'delegation'
+  const delegation = app.render()
+  const text = app.text(delegation)
   assert.match(text, /COST LADDER/)
   assert.match(text, /gpt-6-luna/)
   assert.match(text, /mode stops at tier 4/)
-  assert.doesNotMatch(text, /MODELS IT CAN PICK/)
-  const heavyweight = app.nodes(page, n => n.type === 'select' && n.props['aria-label'] === 'Heavyweight')[0]
+  const heavyweight = app.nodes(delegation, n => n.type === 'select' && n.props['aria-label'] === 'Heavyweight')[0]
   assert.deepEqual(app.nodes(heavyweight, n => n.type === 'option').map(n => n.props.value), ['', 'anthropic', 'openai-codex'])
+  app.slots[0] = 'diagram'
+  let page = app.render()
+  assert.doesNotMatch(app.text(page), /COST LADDER|MODELS IT CAN PICK/)
   app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Cost ladder')[0].props.onCheckedChange(false)
   page = app.render()
   await app.nodes(page, n => n.props?.['data-action'] === 'save-router')[0].props.onClick()
@@ -589,8 +597,9 @@ test('no Jev key: the local learner decides and the page offers to add one', () 
   assert.ok(button(app, page, 'Add Jev API key'))
 })
 
-test('router edits are saved together', async () => {
+test('focus, plan weights and heavyweight are saved together from Delegation', async () => {
   const app = routerPage()
+  app.slots[0] = 'delegation'
   let page = app.render()
   button(app, page, 'Best').props.onClick()
   page = app.render()
@@ -600,7 +609,7 @@ test('router edits are saved together', async () => {
   const choice = app.nodes(heavyweight, n => n.type === 'option' && !!n.props.value)[0].props.value
   heavyweight.props.onChange({ target: { value: choice } })
   page = app.render()
-  await app.nodes(page, n => n.props?.['data-action'] === 'save-router')[0].props.onClick()
+  await app.nodes(page, n => n.props?.['data-action'] === 'save-routing')[0].props.onClick()
   const body = JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/router/settings').body))
   assert.equal(body.mode, 'best')
   assert.equal(body.heavyweight, choice)

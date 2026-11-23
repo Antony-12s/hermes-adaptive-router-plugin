@@ -636,7 +636,7 @@ function RouterFlow({ decision, jev }) {
       decision && h('small', { className: 'harp-muted' }, decision.applied ? 'Apply mode' : 'Shadow recommendation')))
 }
 
-function RouterView({ onAddKey, showWeights, onWeightsShown }) {
+function RouterView({ onAddKey }) {
   const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
   const delegation = useQuery({ queryKey: [ID, 'delegation'], queryFn: () => rest('/delegation'), refetchInterval: 15000 })
   const [draft, setDraft] = useState(null)
@@ -644,11 +644,6 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
   const [fixing, setFixing] = useState(null)
   const [verifying, setVerifying] = useState(null)
   const data = query.data
-  useEffect(() => {
-    if (!showWeights || !data) return
-    document.getElementById('harp-provider-weights')?.scrollIntoView({ block: 'start' })
-    onWeightsShown()
-  }, [data, showWeights, onWeightsShown])
   if (!data) return h(QueryState, { query, label: 'router' })
   const s = draft || data.settings
   const edit = changes => setDraft({ ...s, ...changes })
@@ -682,7 +677,7 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
     h(Section, { title: 'LATEST ROUTED MESSAGE' }, h(RouterFlow, { decision: data.recent[0], jev: data.jev })),
     delegation.data?.latest && h(Section, { title: 'LATEST HERMES DELEGATION' },
       h(DelegatedResult, { result: delegation.data.latest })),
-    data.ladder ? h(LadderView, { ladder: data.ladder, mode: s.mode }) : h(Section, { title: 'MODELS IT CAN PICK' },
+    !data.ladder && h(Section, { title: 'MODELS IT CAN PICK' },
       h('div', { className: 'harp-tools' }, 'Strongest first: when unsure it uses the top one. The description tells Jev and the learner what each is for.'),
       ...s.candidates.map((c, i) => h('div', { className: 'harp-cand', key: candId(c) + i },
         h('span', { className: 'harp-muted' }, i + 1),
@@ -696,39 +691,6 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
           h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Remove ${i + 1}`, onClick: () => edit({ candidates: s.candidates.filter((_, j) => j !== i) }) }, h(Codicon, { name: 'trash', size: '0.8rem' }))))),
       h('div', { className: 'harp-tools' }, h(Button, { size: 'sm', variant: 'outline', onClick: () => edit({ candidates: [...s.candidates, { provider: 'anthropic', model: (data.models.anthropic || [''])[0], description: '', cap: 'medium' }] }) },
         h(Codicon, { name: 'add', size: '0.8rem' }), 'Add model'))),
-    h('section', { id: 'harp-provider-weights', 'aria-label': 'Focus and provider load' },
-      h('div', { className: 'harp-routing-controls' },
-        h('b', { title: MODE_HINTS[data.ladder ? 'ladder' : 'candidates'][s.mode] }, 'Focus'),
-        h(SegmentedControl, { options: [{ id: 'save', label: 'Save' }, { id: 'balanced', label: 'Balanced' }, { id: 'best', label: 'Best' }],
-          value: s.mode, onChange: value => edit({ mode: value }) }),
-        h('label', null, 'Heavyweight',
-          data.ladder
-            ? h(Pick, { value: HEAVYWEIGHT_PROVIDERS.includes((s.heavyweight || '').split(':')[0]) ? s.heavyweight.split(':')[0] : '', label: 'Heavyweight',
-              options: [{ value: '', label: 'Auto by quota' }, ...HEAVYWEIGHT_PROVIDERS.map(p => ({ value: p, label: ROUTER_LABEL[p] || p }))],
-              onChange: heavyweight => edit({ heavyweight }) })
-            : h(Pick, { value: s.candidates.some(c => candId(c) === s.heavyweight) ? s.heavyweight : '', label: 'Heavyweight',
-              options: [{ value: '', label: 'Auto by quota' }, ...s.candidates.map(c => ({
-                value: candId(c), label: `${ROUTER_LABEL[c.provider] || c.provider} · ${c.model}`,
-              }))], onChange: heavyweight => edit({ heavyweight }) })),
-        h('label', null, 'Provider load limit',
-          h(Pick, { value: String(s.limit), label: 'Load limit', options: [70, 80, 85, 90, 95].map(v => ({ value: String(v), label: `${v}%` })), onChange: v => edit({ limit: Number(v) }) }))),
-      h('div', { className: 'harp-load' }, ...Object.keys(ROUTER_LABEL).map(provider => {
-        const load = data.loads[provider]
-        const hot = load && load.used >= s.limit
-        return h('div', { key: provider, className: hot ? 'hot' : '' },
-          h('div', { className: 'harp-account' }, h('b', null, ROUTER_LABEL[provider]), h('span', { className: 'harp-grow' }),
-            h('span', { className: 'harp-muted' }, !load ? 'no usage read yet' : hot ? `${load.used}% used: near its limit` : `${load.used}% used`)),
-          ...(data.accounts[provider] || []).map(a => h('div', { className: 'acc', key: a.id }, h('span', { title: a.label }, a.label),
-            h(Pick, { value: (s.plans[provider] || {})[a.id] || 'auto', label: `Plan: ${a.label}`, wide: true,
-              options: [{ value: 'auto', label: `Auto · ${a.weight || 'x1'}` }, 'x1', 'x5', 'x10', 'x20'],
-              onChange: v => {
-                const plans = { ...(s.plans[provider] || {}) }
-                if (v === 'auto') delete plans[a.id]
-                else plans[a.id] = v
-                edit({ plans: { ...s.plans, [provider]: plans } })
-              } }),
-            h(Meter, { percent: a.peak, label: `${a.label} usage` }))))
-      }))),
     h(Section, { title: 'WHAT IT LEARNED' },
       h('div', { className: 'harp-cards' },
         h(SummaryCard, { title: 'Learned from', value: `${data.samples}`, detail: `messages · ${st.corrections_total} of them your corrections` }),
@@ -765,7 +727,67 @@ function DelegatedResult({ result }) {
     h('div', null, `Provider: ${ROUTER_LABEL[result.provider] || result.provider} · Agent: ${result.model} · Effort: ${result.reasoning_effort}`))
 }
 
-function DelegationView() {
+function RoutingPanel({ showWeights, onWeightsShown }) {
+  // Cost ladder, Focus, Heavyweight, load limit and plan weights. Lives on Delegation; Diagram keeps the switches.
+  const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
+  const [draft, setDraft] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const data = query.data
+  useEffect(() => {
+    if (!showWeights || !data) return
+    document.getElementById('harp-provider-weights')?.scrollIntoView({ block: 'start' })
+    onWeightsShown?.()
+  }, [data, showWeights, onWeightsShown])
+  if (!data) return h(QueryState, { query, label: 'router' })
+  const s = draft || data.settings
+  const edit = changes => setDraft({ ...s, ...changes })
+  const save = async () => {
+    setSaving(true)
+    try { await post('/router/settings', s); setDraft(null); notify('success', 'Routing saved.'); query.refetch() }
+    catch (error) { notify('error', `Save routing: ${failure(error)}`) }
+    finally { setSaving(false) }
+  }
+  return h('div', null,
+    data.ladder && h(LadderView, { ladder: data.ladder, mode: s.mode }),
+    h('section', { id: 'harp-provider-weights', 'aria-label': 'Focus and provider load' },
+      h('div', { className: 'harp-routing-controls' },
+        h('b', { title: MODE_HINTS[data.ladder ? 'ladder' : 'candidates'][s.mode] }, 'Focus'),
+        h(SegmentedControl, { options: [{ id: 'save', label: 'Save' }, { id: 'balanced', label: 'Balanced' }, { id: 'best', label: 'Best' }],
+          value: s.mode, onChange: value => edit({ mode: value }) }),
+        h('label', null, 'Heavyweight',
+          data.ladder
+            ? h(Pick, { value: HEAVYWEIGHT_PROVIDERS.includes((s.heavyweight || '').split(':')[0]) ? s.heavyweight.split(':')[0] : '', label: 'Heavyweight',
+              options: [{ value: '', label: 'Auto by quota' }, ...HEAVYWEIGHT_PROVIDERS.map(p => ({ value: p, label: ROUTER_LABEL[p] || p }))],
+              onChange: heavyweight => edit({ heavyweight }) })
+            : h(Pick, { value: s.candidates.some(c => candId(c) === s.heavyweight) ? s.heavyweight : '', label: 'Heavyweight',
+              options: [{ value: '', label: 'Auto by quota' }, ...s.candidates.map(c => ({
+                value: candId(c), label: `${ROUTER_LABEL[c.provider] || c.provider} · ${c.model}`,
+              }))], onChange: heavyweight => edit({ heavyweight }) })),
+        h('label', null, 'Provider load limit',
+          h(Pick, { value: String(s.limit), label: 'Load limit', options: [70, 80, 85, 90, 95].map(v => ({ value: String(v), label: `${v}%` })), onChange: v => edit({ limit: Number(v) }) }))),
+      h('div', { className: 'harp-load' }, ...Object.keys(ROUTER_LABEL).map(provider => {
+        const load = data.loads[provider]
+        const hot = load && load.used >= s.limit
+        return h('div', { key: provider, className: hot ? 'hot' : '' },
+          h('div', { className: 'harp-account' }, h('b', null, ROUTER_LABEL[provider]), h('span', { className: 'harp-grow' }),
+            h('span', { className: 'harp-muted' }, !load ? 'no usage read yet' : hot ? `${load.used}% used: near its limit` : `${load.used}% used`)),
+          ...(data.accounts[provider] || []).map(a => h('div', { className: 'acc', key: a.id }, h('span', { title: a.label }, a.label),
+            h(Pick, { value: (s.plans[provider] || {})[a.id] || 'auto', label: `Plan: ${a.label}`, wide: true,
+              options: [{ value: 'auto', label: `Auto · ${a.weight || 'x1'}` }, 'x1', 'x5', 'x10', 'x20'],
+              onChange: v => {
+                const plans = { ...(s.plans[provider] || {}) }
+                if (v === 'auto') delete plans[a.id]
+                else plans[a.id] = v
+                edit({ plans: { ...s.plans, [provider]: plans } })
+              } }),
+            h(Meter, { percent: a.peak, label: `${a.label} usage` }))))
+      }))),
+    h('div', { className: 'harp-tools' }, h('span', { className: 'harp-grow' }), draft && h('span', null, 'Unsaved changes'),
+      h(Button, { size: 'sm', variant: 'default', 'data-action': 'save-routing', disabled: !draft || saving, onClick: save },
+        saving ? 'Saving…' : 'Save routing')))
+}
+
+function DelegationView({ showWeights, onWeightsShown } = {}) {
   const query = useQuery({ queryKey: [ID, 'delegation'], queryFn: () => rest('/delegation'), refetchInterval: 15000 })
   const load = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 60000 })
   const [draft, setDraft] = useState(null)
@@ -787,7 +809,7 @@ function DelegationView() {
     } catch (error) { setStatus(`Save failed: ${failure(error)}`) }
     finally { setSaving(false) }
   }
-  return h(Section, { title: 'HERMES DELEGATION' },
+  return h('div', null, h(Section, { title: 'HERMES DELEGATION' },
     h('p', null, 'This flow applies when Hermes uses HARP as its delegation backend.'),
     h('ol', { className: 'harp-delegation-flow', 'aria-label': 'How Hermes chooses a work route' },
       h('li', { className: 'harp-card' }, h('strong', null, 'Named work'),
@@ -799,7 +821,7 @@ function DelegationView() {
       h('li', { className: 'harp-card' }, h('strong', null, 'Run the subagent'),
         h('p', null, 'A match supplies its saved provider, agent and effort. If there is no match, Hermes uses its default route.'))),
     h('details', { className: 'harp-card' }, h('summary', null, 'Provider weighting'),
-      h('p', null, 'Manual plan weights are set under Provider load in Diagram. Saved work routes use the provider you select.'),
+      h('p', null, 'Manual plan weights are set under Provider load below. Saved work routes use the provider you select.'),
       ...providers.flatMap(provider => (load.data?.accounts?.[provider] || []).map(account =>
         h('div', { key: `${provider}:${account.id}` }, `${ROUTER_LABEL[provider]} · ${account.label} · ${account.plan || 'Unknown plan'} · ${load.data.settings?.plans?.[provider]?.[account.id] || account.weight || 'x1'}`)))),
     h('div', { className: 'harp-tools' }, h('label', null, 'Classifier ',
@@ -820,7 +842,8 @@ function DelegationView() {
         h(Pick, { label: `Work agent ${i + 1}`, value: job.model, options: [...new Set([job.model, ...models(job.provider)])], onChange: model => changeJob(i, { model }) }),
         h(Pick, { label: `Work effort ${i + 1}`, value: job.effort, options: ['low', 'medium', 'high'], onChange: effort => changeJob(i, { effort }) }),
         h(Button, { size: 'sm', variant: 'ghost', onClick: () => setDraft({ ...settings, jobs: settings.jobs.filter((_, index) => index !== i) }) }, 'Remove work')))),
-    query.data.latest && h(DelegatedResult, { result: query.data.latest }))
+    query.data.latest && h(DelegatedResult, { result: query.data.latest })),
+    h(RoutingPanel, { showWeights, onWeightsShown }))
 }
 
 function RowActions({ row, canAct, onAction }) {
@@ -1493,7 +1516,7 @@ function HarpPage() {
         { id: 'report', label: 'Report' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }], value: view, onChange: setView }),
       view === 'usage' && h('span', null, accounts.data?.live_read_at ? `Live usage read ${stamp(accounts.data.live_read_at * 1000, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Live usage not read yet')),
     h('div', { className: 'harp-body' }, top === 'summary' ? h(SummaryView, { onOpen: pickTop })
-      : top === 'delegation' ? h(DelegationView) : top === 'settings' ? h(QuotaSettings, { onOpen: pickTop, onWeights: () => { setShowWeights(true); pickTop('diagram') } }) : diagram ? h(RouterView, { onAddKey: () => pickTop('jev'), showWeights, onWeightsShown: () => setShowWeights(false) })
+      : top === 'delegation' ? h(DelegationView, { showWeights, onWeightsShown: () => setShowWeights(false) }) : top === 'settings' ? h(QuotaSettings, { onOpen: pickTop, onWeights: () => { setShowWeights(true); pickTop('delegation') } }) : diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
       : view === 'activity' ? h(ActivityView, { provider })
         : view === 'report' ? h(ReportView, { provider })
           : view === 'health' ? h(HealthView, { provider })
