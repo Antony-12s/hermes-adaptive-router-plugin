@@ -809,7 +809,7 @@ function DelegationView({ showWeights, onWeightsShown } = {}) {
     } catch (error) { setStatus(`Save failed: ${failure(error)}`) }
     finally { setSaving(false) }
   }
-  return h('div', null, h(Section, { title: 'HERMES DELEGATION' },
+  return h('div', null, h(RoutingPanel, { showWeights, onWeightsShown }), h(Section, { title: 'HERMES DELEGATION' },
     h('p', null, 'This flow applies when Hermes uses HARP as its delegation backend.'),
     h('ol', { className: 'harp-delegation-flow', 'aria-label': 'How Hermes chooses a work route' },
       h('li', { className: 'harp-card' }, h('strong', null, 'Named work'),
@@ -821,7 +821,7 @@ function DelegationView({ showWeights, onWeightsShown } = {}) {
       h('li', { className: 'harp-card' }, h('strong', null, 'Run the subagent'),
         h('p', null, 'A match supplies its saved provider, agent and effort. If there is no match, Hermes uses its default route.'))),
     h('details', { className: 'harp-card' }, h('summary', null, 'Provider weighting'),
-      h('p', null, 'Manual plan weights are set under Provider load below. Saved work routes use the provider you select.'),
+      h('p', null, 'Manual plan weights are set under Provider load above. Saved work routes use the provider you select.'),
       ...providers.flatMap(provider => (load.data?.accounts?.[provider] || []).map(account =>
         h('div', { key: `${provider}:${account.id}` }, `${ROUTER_LABEL[provider]} · ${account.label} · ${account.plan || 'Unknown plan'} · ${load.data.settings?.plans?.[provider]?.[account.id] || account.weight || 'x1'}`)))),
     h('div', { className: 'harp-tools' }, h('label', null, 'Classifier ',
@@ -842,8 +842,7 @@ function DelegationView({ showWeights, onWeightsShown } = {}) {
         h(Pick, { label: `Work agent ${i + 1}`, value: job.model, options: [...new Set([job.model, ...models(job.provider)])], onChange: model => changeJob(i, { model }) }),
         h(Pick, { label: `Work effort ${i + 1}`, value: job.effort, options: ['low', 'medium', 'high'], onChange: effort => changeJob(i, { effort }) }),
         h(Button, { size: 'sm', variant: 'ghost', onClick: () => setDraft({ ...settings, jobs: settings.jobs.filter((_, index) => index !== i) }) }, 'Remove work')))),
-    query.data.latest && h(DelegatedResult, { result: query.data.latest })),
-    h(RoutingPanel, { showWeights, onWeightsShown }))
+    query.data.latest && h(DelegatedResult, { result: query.data.latest })))
 }
 
 function RowActions({ row, canAct, onAction }) {
