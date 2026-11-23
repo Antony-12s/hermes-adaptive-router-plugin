@@ -92,6 +92,37 @@ class HookTests(unittest.TestCase):
                 store.log_live("main", f"call {index}", "anthropic", "haiku", "", 1.0, 10, index, "ok", "")
             self.assertEqual([call["text"] for call in store.live()], ["call 5", "call 4", "call 3", "call 2"])
 
+    def test_running_total_counts_every_call_until_reset(self):
+        with tempfile.TemporaryDirectory() as home:
+            from pathlib import Path
+
+            store = harp._sibling("router").Store(Path(home) / "router.sqlite3")
+            first = store.total()
+            self.assertEqual((first["tokens"], first["requests"], first["price"]), (0, 0, 0.0))
+            store.add_total(1000, 0.5)
+            store.add_total(250, None)       # unknown price still counts tokens and the request
+            store.add_total(None, None)      # no usage reported: a request, no tokens
+            total = store.total()
+            self.assertEqual((total["tokens"], total["requests"], total["price"]), (1250, 3, 0.5))
+            self.assertEqual(total["since"], first["since"])
+            reset = store.reset_total(now=first["since"] + 60)
+            self.assertEqual((reset["tokens"], reset["requests"], reset["price"], reset["since"]), (0, 0, 0.0, first["since"] + 60))
+            again = harp._sibling("router").Store(Path(home) / "router.sqlite3").total()   # survives a restart
+            self.assertEqual(again["since"], first["since"] + 60)
+
+    def test_live_requests_feed_the_running_total_main_and_auxiliary(self):
+        with tempfile.TemporaryDirectory() as home:
+            from pathlib import Path
+
+            store = harp._sibling("router").Store(Path(home) / "router.sqlite3")
+            with patch.object(harp, "_engine", return_value=SimpleNamespace(store=store)):
+                harp.record_live_request(api_request_id="a", provider="anthropic", model="claude-opus-5-5", usage={"total_tokens": 1000})
+                harp.record_auxiliary_request(api_request_id="b", aux_task="title", provider="anthropic", model="claude-haiku-5-5",
+                                              usage={"total_tokens": 200})
+            total = store.total()
+            self.assertEqual((total["tokens"], total["requests"]), (1200, 2))
+            self.assertGreater(total["price"], 0)
+
     def run_turn(self, engine, provider="anthropic", depth=0):
         agent = SimpleNamespace(provider=provider, _delegate_depth=depth)
         with patch.object(harp, "_engine", return_value=engine), patch.object(harp, "_find_agent", return_value=agent), \

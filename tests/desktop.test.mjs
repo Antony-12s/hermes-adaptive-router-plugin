@@ -664,6 +664,22 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   assert.equal(cells.filter(c => c.props.className.includes('harp-gb-date')).length, 30)
 })
 
+test('summary keeps a running token total until Reset is confirmed', async (t) => {
+  const app = fixture({ configured: false, usage: [] })
+  t.after(app.dispose)
+  app.results.router = { data: routerData(), refetch() {} }
+  app.results.heat = { data: heatData(), refetch() {} }
+  app.results['running-total'] = { data: { since: 1795323120, tokens: 1234567890, requests: 4321, price: 2345.6 }, refetch() {} }
+  app.slots[0] = 'summary'
+  let page = app.render()
+  assert.match(app.text(page), /Tokens since reset.*1\.2B.*since .*\$2,345\.60 at API prices.*4,321 requests/)
+  button(app, page, 'Reset').props.onClick()
+  assert.ok(!app.requests.some(r => r?.path === '/tokens/total/reset'), 'first click only asks')
+  page = app.render()
+  await button(app, page, 'Reset to 0').props.onClick()
+  assert.ok(app.requests.some(r => r?.path === '/tokens/total/reset' && r.method === 'POST'))
+})
+
 test('HARP opens on Summary', () => {
   const app = fixture({ configured: false, usage: [] })
   app.results.router = { data: routerData(), refetch() {} }

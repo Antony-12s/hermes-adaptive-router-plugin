@@ -200,9 +200,12 @@ def record_live_request(api_request_id=None, provider=None, model=None, response
         kind = f"aux:{str(aux_task)[:48]}" if aux_task else "main"
         duration = api_duration if type(api_duration) in (int, float) and 0 <= api_duration < 86400 else None
         step = api_call_count if not aux_task and type(api_call_count) is int else None
-        _engine().store.log_live(kind, text if not aux_task else "", str(provider)[:80], str(name)[:150],
-                                 str(reasoning_effort or effort)[:20], duration, reported_tokens(usage),
-                                 step, "error" if error or error_type else "ok", source)
+        tokens = reported_tokens(usage)
+        store = _engine().store
+        store.log_live(kind, text if not aux_task else "", str(provider)[:80], str(name)[:150],
+                       str(reasoning_effort or effort)[:20], duration, tokens,
+                       step, "error" if error or error_type else "ok", source)
+        store.add_total(tokens, _sibling("pool_state").estimate_price(str(name), tokens))
     except Exception:  # noqa: BLE001 - observers must never interrupt requests
         pass
 

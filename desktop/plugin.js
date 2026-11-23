@@ -534,8 +534,9 @@ function Meter({ percent, label, remaining = false }) {
     h('span', null, `${number.format(percent)}%`))
 }
 
-function SummaryCard({ title, value, detail, percent, lines }) {
+function SummaryCard({ title, value, detail, percent, lines, action }) {
   return h('div', { className: 'harp-card' },
+    action && h('div', { style: { float: 'right' } }, action),
     h('div', { className: 'harp-card-k' }, title),
     h('div', { className: 'harp-card-v' }, value),
     Number.isFinite(percent) && h('span', { className: `harp-bar${percent >= 90 ? ' bad' : percent >= 75 ? ' warn' : ''}`, 'aria-hidden': true },
@@ -1057,12 +1058,33 @@ function SummaryView({ onOpen }) {
       h(SummaryCard, { title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–',
         detail: tokens ? null : 'counting starts with the next request',
         lines: tokens ? [price != null && `$${usd.format(price)} at API prices`, requests ? `${number.format(requests)} requests` : null] : [] }),
+      h(RunningTotal),
       h(SummaryCard, { title: 'Accounts usable', value: `${usableCount} / ${quota.length}`, detail: 'anthropic and Codex' }),
       h(SummaryCard, { title: 'Least left', value: lowest ? `${lowest.left}%` : '–', percent: lowest ? 100 - lowest.left : undefined,
         detail: lowest ? `${lowest.label} · ${lowest.kind}${lowest.reset ? ` · ${countdown(lowest.reset, now)}` : ''}` : 'read live usage' }),
       h(SummaryCard, { title: 'Jev', value: jev?.state === 'ok' ? 'ready' : jev?.state || '–', detail: jev?.state === 'ok' ? `${jevTitle} · ${jev.label}` : jevTitle })),
     h(ActivityHeat, { now }),
     ...SUMMARY_PROVIDERS.map(([provider, title], i) => h(ProviderSummary, { key: provider, provider, title, query: queries[i], now, onOpen })))
+}
+
+function RunningTotal() {
+  const query = useQuery({ queryKey: [ID, 'running-total'], queryFn: () => rest('/tokens/total'), refetchInterval: 15000 })
+  const [confirming, setConfirming] = useState(false)
+  const [resetting, setResetting] = useState(false)
+  const total = query.data
+  const reset = async () => {
+    setResetting(true)
+    try { await post('/tokens/total/reset') } finally { setResetting(false); setConfirming(false); query.refetch() }
+  }
+  const action = confirming
+    ? h('span', null, h(Button, { size: 'sm', variant: 'destructive', disabled: resetting, onClick: reset }, 'Reset to 0'),
+      h(Button, { size: 'sm', variant: 'ghost', disabled: resetting, onClick: () => setConfirming(false) }, 'Cancel'))
+    : h(Button, { size: 'sm', variant: 'ghost', disabled: !total, onClick: () => setConfirming(true) }, 'Reset')
+  return h(SummaryCard, { title: 'Tokens since reset', action,
+    value: total ? compact.format(total.tokens) : '–',
+    detail: total ? `since ${stamp(total.since * 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'loading',
+    lines: total ? [total.price ? `$${usd.format(total.price)} at API prices` : null,
+      `${number.format(total.requests)} requests`] : [] })
 }
 
 function Budget({ account }) {

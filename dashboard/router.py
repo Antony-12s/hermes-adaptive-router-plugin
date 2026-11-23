@@ -184,7 +184,10 @@ class Store:
                 kind TEXT NOT NULL, text TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
                 effort TEXT NOT NULL, duration REAL, tokens INTEGER, step INTEGER, status TEXT NOT NULL,
                 source TEXT NOT NULL DEFAULT '');
+              CREATE TABLE IF NOT EXISTS running_total (id INTEGER PRIMARY KEY CHECK (id = 1), since REAL NOT NULL,
+                tokens INTEGER NOT NULL DEFAULT 0, requests INTEGER NOT NULL DEFAULT 0, price REAL NOT NULL DEFAULT 0);
             """)
+            db.execute("INSERT OR IGNORE INTO running_total (id, since) VALUES (1, ?)", (time.time(),))
 
     def _db(self):
         return closing(sqlite3.connect(self.path))
@@ -195,6 +198,25 @@ class Store:
                        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                        (time.time(), kind, text, provider, model, effort, duration, tokens, step, status, source))
             db.execute("DELETE FROM live_calls WHERE id <= (SELECT MAX(id) - 100 FROM live_calls)")
+
+    def add_total(self, tokens, price):
+        """Running total since the user's last reset; kept apart from the 8-day activity rows."""
+        with self._db() as db, db:
+            db.execute("UPDATE running_total SET tokens = tokens + ?, requests = requests + 1, price = price + ? WHERE id = 1",
+                       (tokens if type(tokens) is int and tokens > 0 else 0,
+                        price if isinstance(price, (int, float)) and price > 0 else 0))
+
+    def total(self):
+        with self._db() as db:
+            since, tokens, requests, price = db.execute(
+                "SELECT since, tokens, requests, price FROM running_total WHERE id = 1").fetchone()
+        return {"since": since, "tokens": tokens, "requests": requests, "price": round(price, 4)}
+
+    def reset_total(self, now=None):
+        with self._db() as db, db:
+            db.execute("UPDATE running_total SET since = ?, tokens = 0, requests = 0, price = 0 WHERE id = 1",
+                       (time.time() if now is None else now,))
+        return self.total()
 
     def live(self, limit=4):
         with self._db() as db:

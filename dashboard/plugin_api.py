@@ -623,6 +623,17 @@ def get_live_routing():
     return {"calls": _engine().store.live()}
 
 
+@router.get("/tokens/total")
+def get_running_total():
+    return _engine().store.total()
+
+
+@router.post("/tokens/total/reset")
+def reset_running_total():
+    _log("anthropic", "schedule", "Running token total reset")
+    return _engine().store.reset_total()
+
+
 @router.get("/delegation")
 def get_delegation():
     return {"settings": delegation.settings(_home()),
