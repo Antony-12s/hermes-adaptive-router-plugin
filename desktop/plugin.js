@@ -528,7 +528,7 @@ const CSS = `
 .harp-jobs{display:grid;gap:0;margin:6px 0 10px}
 .harp-job{display:grid;grid-template-columns:minmax(110px,1fr) minmax(160px,2fr) 130px 150px 92px auto;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
 @media(max-width:850px){.harp-job{grid-template-columns:1fr 1fr}}
-.harp-load{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:6px;max-width:640px;margin-top:4px}
+.harp-load{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:6px;max-width:820px;margin-top:4px}
 .harp-load>div{border:1px solid var(--ui-stroke-tertiary);border-radius:6px;padding:4px 8px}
 .harp-load>div.hot{border-color:var(--ui-red)}
 .harp-load .acc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,84px) minmax(0,88px);gap:5px;align-items:center;font-size:.6875rem;margin-top:2px}
