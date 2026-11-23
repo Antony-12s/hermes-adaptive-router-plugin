@@ -7,6 +7,13 @@ const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'u
   .replace(/^import .*$/gm, '')
   .replace('export default {', 'globalThis.plugin = {')
 
+test('routing provider cards fill the available row without a fixed width cap', () => {
+  const rule = source.match(/\.harp-load\{([^}]+)\}/)?.[1]
+  assert.ok(rule, 'routing card grid must have a CSS rule')
+  assert.doesNotMatch(rule, /max-width\s*:/, 'wide panes must not leave a blank strip')
+  assert.match(rule, /grid-template-columns\s*:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*280px\),\s*1fr\)\)/)
+})
+
 function fixture(usage, session = {}) {
   const requests = []
   const slots = ['anthropic', 'usage', '']
