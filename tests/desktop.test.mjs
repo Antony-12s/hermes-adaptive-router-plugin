@@ -730,3 +730,14 @@ test('HARP opens on Summary', () => {
   assert.equal(summary.props['aria-pressed'], true)
   assert.match(app.text(page), /ACTIVITY/)
 })
+
+test('delegation lists saved work as rows and says so when there is none', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.delegation = { data: { settings: { classifier: 'local', jobs: [] }, models: { anthropic: ['opus'] }, latest: null }, refetch() {} }
+  app.results.router = { data: routerData(), refetch() {} }
+  app.slots[0] = 'delegation'
+  assert.match(app.text(app.render()), /No saved work yet/)
+  app.results.delegation.data.settings.jobs = [{ name: 'Review PR', description: 'Review', provider: 'anthropic', model: 'opus', effort: 'medium' }]
+  assert.equal(app.nodes(app.render(), n => n.props?.className === 'harp-job').length, 1)
+  assert.doesNotMatch(app.text(app.render()), /No saved work yet/)
+})
