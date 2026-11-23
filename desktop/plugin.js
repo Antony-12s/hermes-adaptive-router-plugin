@@ -381,8 +381,9 @@ const CSS = `
 .harp-grow{flex:1}
 .harp-sub{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:0 16px 8px;font-size:.6875rem;color:var(--ui-text-tertiary)}
 .harp-body{flex:1;overflow:auto;padding:2px 16px 28px}
-.harp-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:2px 0 6px}
-@media(max-width:850px){.harp-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* one row whatever the card count (Summary has 5, provider pages 4); wrap only on narrow panes */
+.harp-cards{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px;margin:2px 0 6px}
+@media(max-width:850px){.harp-cards{grid-auto-flow:row;grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:500px){.harp-cards{grid-template-columns:1fr}}
 .harp-card{min-width:0;border:1px solid var(--ui-stroke-secondary);border-radius:8px;padding:8px 10px;background:var(--ui-bg-card)}
 .harp-card-k{font-size:.6875rem;color:var(--ui-text-tertiary)}
@@ -1055,7 +1056,10 @@ function SummaryView({ onOpen }) {
   const [, jevTitle] = KEY_TEXT[jev?.state] || ['', 'Jev key not checked yet']
   return h('div', null,
     h('div', { className: 'harp-cards' },
-      h(TokensCard, { tokens, price, requests }),
+      h(SummaryCard, { title: 'Tokens, last 24 h', value: tokens ? compact.format(tokens) : '–',
+        detail: tokens ? null : 'counting starts with the next request',
+        lines: tokens ? [price != null && `$${usd.format(price)} at API prices`, requests ? `${number.format(requests)} requests` : null] : [] }),
+      h(RunningTotal),
       h(SummaryCard, { title: 'Accounts usable', value: `${usableCount} / ${quota.length}`, detail: 'anthropic and Codex' }),
       h(SummaryCard, { title: 'Least left', value: lowest ? `${lowest.left}%` : '–', percent: lowest ? 100 - lowest.left : undefined,
         detail: lowest ? `${lowest.label} · ${lowest.kind}${lowest.reset ? ` · ${countdown(lowest.reset, now)}` : ''}` : 'read live usage' }),
@@ -1064,8 +1068,7 @@ function SummaryView({ onOpen }) {
     ...SUMMARY_PROVIDERS.map(([provider, title], i) => h(ProviderSummary, { key: provider, provider, title, query: queries[i], now, onOpen })))
 }
 
-function TokensCard({ tokens, price, requests }) {
-  // Last 24 h on top, the running total since the user's last Reset underneath: one card, so Summary stays one row.
+function RunningTotal() {
   const query = useQuery({ queryKey: [ID, 'running-total'], queryFn: () => rest('/tokens/total'), refetchInterval: 15000 })
   const [confirming, setConfirming] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -1077,13 +1080,12 @@ function TokensCard({ tokens, price, requests }) {
   const action = confirming
     ? h('span', null, h(Button, { size: 'sm', variant: 'destructive', disabled: resetting, onClick: reset }, 'Reset to 0'),
       h(Button, { size: 'sm', variant: 'ghost', disabled: resetting, onClick: () => setConfirming(false) }, 'Cancel'))
-    : h(Button, { size: 'sm', variant: 'ghost', disabled: !total, title: 'Reset the running total', onClick: () => setConfirming(true) }, 'Reset')
-  const since = total && stamp(total.since * 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-  const last24 = tokens ? [price != null && `$${usd.format(price)}`, requests ? `${number.format(requests)} req` : null].filter(Boolean).join(' · ') : 'counting starts with the next request'
-  return h(SummaryCard, { title: 'Tokens, last 24 h', action, value: tokens ? compact.format(tokens) : '–',
-    lines: [last24, total
-      ? `Since ${since}: ${compact.format(total.tokens)}${total.price ? ` · $${usd.format(total.price)}` : ''}`
-      : 'Since reset: –'] })
+    : h(Button, { size: 'sm', variant: 'ghost', disabled: !total, onClick: () => setConfirming(true) }, 'Reset')
+  return h(SummaryCard, { title: 'Tokens since reset', action,
+    value: total ? compact.format(total.tokens) : '–',
+    detail: total ? `since ${stamp(total.since * 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'loading',
+    lines: total ? [total.price ? `$${usd.format(total.price)} at API prices` : null,
+      `${number.format(total.requests)} requests`] : [] })
 }
 
 function Budget({ account }) {

@@ -613,7 +613,7 @@ test('summary shows every provider with what is left, plus the tokens card', () 
   app.slots[0] = 'summary'
   const page = app.render()
   const text = app.text(page)
-  for (const part of [/ANTHROPIC/, /CODEX/, /TYPE-SAFE/, /32% left/, /100% left/, /resets in \d+d \d+h/, /\$\d+\.\d{2} · [\d,]+ req/, /Jev API found/])
+  for (const part of [/ANTHROPIC/, /CODEX/, /TYPE-SAFE/, /32% left/, /100% left/, /resets in \d+d \d+h/, /\$\d+\.\d{2} at API prices/, /requests/, /Jev API found/])
     assert.match(text, part)
   const keys = app.requests.filter(r => r?.queryKey?.[1] === 'accounts').map(r => r.queryKey[2])
   for (const p of ['anthropic', 'openai-codex', 'jev']) assert.ok(keys.includes(p), p)
@@ -664,7 +664,7 @@ test('activity heat grid sits in Summary with a Week/Month toggle', () => {
   assert.equal(cells.filter(c => c.props.className.includes('harp-gb-date')).length, 30)
 })
 
-test('the tokens card keeps a running total until Reset is confirmed, in one row of four', async (t) => {
+test('summary keeps a running token total until Reset is confirmed', async (t) => {
   const app = fixture({ configured: false, usage: [] })
   t.after(app.dispose)
   app.results.router = { data: routerData(), refetch() {} }
@@ -672,8 +672,8 @@ test('the tokens card keeps a running total until Reset is confirmed, in one row
   app.results['running-total'] = { data: { since: 1795323120, tokens: 1234567890, requests: 4321, price: 2345.6 }, refetch() {} }
   app.slots[0] = 'summary'
   let page = app.render()
-  assert.match(app.text(page), /Tokens, last 24 h.*Since .*: 1\.2B · \$2,345\.60/)
-  assert.equal(app.nodes(page, n => n.props?.className === 'harp-cards')[0].children.filter(Boolean).length, 4, 'Summary stays one row of four')
+  assert.match(app.text(page), /Tokens since reset.*1\.2B.*since .*\$2,345\.60 at API prices.*4,321 requests/)
+  assert.equal(app.nodes(page, n => n.props?.className === 'harp-cards')[0].children.filter(Boolean).length, 5)
   button(app, page, 'Reset').props.onClick()
   assert.ok(!app.requests.some(r => r?.path === '/tokens/total/reset'), 'first click only asks')
   page = app.render()
