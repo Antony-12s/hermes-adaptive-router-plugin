@@ -674,6 +674,7 @@ test('summary keeps a running token total until Reset is confirmed', async (t) =
   let page = app.render()
   assert.match(app.text(page), /Tokens since reset.*1\.2B.*since .*\$2,345\.60 at API prices.*4,321 requests/)
   assert.equal(app.nodes(page, n => n.props?.className === 'harp-cards')[0].children.filter(Boolean).length, 5)
+  assert.match(app.text(page), /Tokens since reset.*Tokens, last 24 h/, 'running total comes first')
   button(app, page, 'Reset').props.onClick()
   assert.ok(!app.requests.some(r => r?.path === '/tokens/total/reset'), 'first click only asks')
   page = app.render()
