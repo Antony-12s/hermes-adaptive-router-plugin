@@ -30,6 +30,7 @@ DIFFICULTY = [
 DEFAULTS = {
     "enabled": True, "apply": False, "mode": "balanced", "limit": 85, "heavyweight": "",
     "jev_model": "jev-latest", "jev_daily_cap": 300, "plans": {},
+    "ladder": True,   # route by difficulty tier and cost (dashboard/ladder.py); False keeps the candidate list below
     "anthropic_display_plans": {},
     "candidates": [   # strongest first; editable on the Diagram page
         {"provider": "anthropic", "model": "claude-opus-5-5", "cap": "high",
@@ -62,6 +63,8 @@ def validate(settings):
         raise ValueError("mode must be save, balanced or best")
     if not (50 <= int(settings["limit"]) <= 100):
         raise ValueError("limit must be 50 to 100")
+    if not isinstance(settings.get("ladder", True), bool):
+        raise ValueError("ladder must be true or false")
     if not isinstance(settings.get("heavyweight", ""), str):
         raise ValueError("heavyweight must be a candidate ID or empty for Auto")
     seen = set()
@@ -110,7 +113,7 @@ class Learner:
     An option scores by cosine similarity to everything it was taught; an option with no data
     scores 0, so it never wins by default. Softmax turns scores into probabilities."""
 
-    TEMPERATURE = 12.0
+    TEMPERATURE = 60.0    # tuned on the 500-prompt routing dataset: ~98% of confident picks are right
 
     def __init__(self):
         self.counts, self.docs, self.df, self.n = defaultdict(Counter), Counter(), Counter(), 0
@@ -212,8 +215,22 @@ class Store:
                             round(decision.get("difficulty") or 0), 1.0, "jev"))
             return cur.lastrowid
 
-    def feedback(self, decision_id, label):
-        """label = the candidate id that should have been used ("" = the pick was right)."""
+    def decision(self, decision_id):
+        with self._db() as db:
+            row = db.execute("SELECT pick, effort, difficulty FROM decisions WHERE id=?", (decision_id,)).fetchone()
+        if row is None:
+            raise KeyError(decision_id)
+        return {"pick": row[0], "effort": row[1], "difficulty": row[2]}
+
+    def tier_samples(self, labels):
+        """(text, label, weight) rows taught under a difficulty tier label."""
+        with self._db() as db:
+            marks = ",".join("?" * len(labels))
+            return db.execute(f"SELECT text, label, weight FROM samples WHERE label IN ({marks})", tuple(labels)).fetchall()
+
+    def feedback(self, decision_id, label, sample_label=None):
+        """label = the candidate id that should have been used ("" = the pick was right).
+        sample_label replaces the label the learner is taught (the tier, in ladder mode)."""
         with self._db() as db, db:
             row = db.execute("SELECT text, pick, difficulty FROM decisions WHERE id=?", (decision_id,)).fetchone()
             if row is None:
@@ -222,10 +239,10 @@ class Store:
             correct = label or pick
             db.execute("UPDATE decisions SET feedback=? WHERE id=?", (correct if label else "ok", decision_id))
             db.execute("INSERT INTO samples (ts, text, label, difficulty, weight, source) VALUES (?,?,?,?,?,?)",
-                       (time.time(), text, correct, round(difficulty or 0), 3.0, "user"))
+                       (time.time(), text, sample_label or correct, round(difficulty or 0), 3.0, "user"))
         return correct
 
-    def verify_route(self, decision_id):
+    def verify_route(self, decision_id, sample_label=None):
         with self._db() as db, db:
             row = db.execute("SELECT text, pick, difficulty FROM decisions WHERE id=?", (decision_id,)).fetchone()
             if row is None:
@@ -233,7 +250,7 @@ class Store:
             if db.execute("INSERT OR IGNORE INTO verified_routes VALUES (?)", (decision_id,)).rowcount:
                 text, pick, difficulty = row
                 db.execute("INSERT INTO samples (ts, text, label, difficulty, weight, source) VALUES (?,?,?,?,?,?)",
-                           (time.time(), text, pick, round(difficulty or 0), 2.0, "verified"))
+                           (time.time(), text, sample_label or pick, round(difficulty or 0), 2.0, "verified"))
             return row[1]
 
     def verified_route_for(self, task_group):

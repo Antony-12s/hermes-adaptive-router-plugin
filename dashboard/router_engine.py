@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 try:
-    from . import router, typesafe
+    from . import ladder, router, typesafe
 except ImportError:  # loaded by file path (plugin_api's _sibling) or as a top-level test module
     import importlib.util as _util
     import sys as _sys
@@ -23,10 +23,20 @@ except ImportError:  # loaded by file path (plugin_api's _sibling) or as a top-l
             spec.loader.exec_module(module)
         return _sys.modules[key]
 
-    router, typesafe = _load("router"), _load("typesafe")
+    ladder, router, typesafe = _load("ladder"), _load("router"), _load("typesafe")
 
 KEY_RECHECK = 300          # seconds between Jev key checks
 LOAD_MAX_AGE = 3600        # usage readings older than this do not count as load
+
+
+def ladder_table():
+    """The ladder as the Desktop page shows it."""
+    tiers = []
+    for index, name in enumerate(ladder.TIERS):
+        rungs = {provider: {**ladder.rung(provider, index), "cost": round(ladder.cost_of(ladder.rung(provider, index)), 1)}
+                 for provider in ladder.RUNGS}
+        tiers.append({"tier": index, "name": name, **rungs})
+    return {"tiers": tiers, "modes": ladder.MODE_TOP_TIER, "efforts": list(ladder.EFFORTS)}
 
 
 class Engine:
@@ -133,10 +143,43 @@ class Engine:
                 self._learner = (signature, learner, levels)
             return self._learner[1], self._learner[2]
 
+    def tier_learner(self):
+        """The difficulty learner: the tier hints plus everything Jev, corrections and verified runs taught."""
+        signature = ("tier", self.store.stats(days=36500)["samples"])
+        with self._lock:
+            if self._learner[0] != signature:
+                learner = router.Learner()
+                learner.TEMPERATURE = ladder.LEARNER_TEMPERATURE
+                for label, hint in zip(ladder.LABELS, ladder.TIER_HINTS):
+                    learner.learn(hint, label, 1.0)
+                for text, label, weight in self.store.tier_samples(ladder.LABELS):
+                    learner.learn(text, label, weight)
+                self._learner = (signature, learner, None)
+            return self._learner[1]
+
+    def feedback(self, decision_id, label):
+        if not self.settings()["ladder"]:
+            return self.store.feedback(decision_id, label)
+        row = self.store.decision(decision_id)
+        tier = ladder.tier_of_label(label) if label else ladder.tier_of_route(row["pick"].split(":", 1)[-1], row["effort"])
+        return self.store.feedback(decision_id, label, sample_label=str(tier))
+
+    def verify(self, decision_id):
+        if not self.settings()["ladder"]:
+            return self.store.verify_route(decision_id)
+        row = self.store.decision(decision_id)
+        tier = ladder.tier_of_route(row["pick"].split(":", 1)[-1], row["effort"])
+        return self.store.verify_route(decision_id, sample_label=str(tier))
+
     def decide(self, text, session="", platform="", current="", log=True, use_jev=True):
         settings = self.settings()
-        if not settings["enabled"] or not settings["candidates"] or not (text or "").strip():
+        if not settings["enabled"] or not (settings["candidates"] or settings["ladder"]) or not (text or "").strip():
             return None
+        if settings["ladder"]:
+            decision = self._decide_ladder(text, settings, self.loads(settings), use_jev)
+            if log:
+                decision["id"] = self.store.log(decision, text, session, platform, current, applied=settings["apply"])
+            return decision
         learner, levels = self.learners(settings)
         seeds = sum(1 for c in settings["candidates"] if c.get("description"))
         loads = self.loads(settings)
@@ -152,6 +195,41 @@ class Engine:
         if log:
             decision["id"] = self.store.log(decision, text, session, platform, current, applied=settings["apply"])
         return decision
+
+    def _decide_ladder(self, text, settings, loads, use_jev):
+        """Tier from the learner (or Jev when it is unsure), provider from quota, model and effort from the ladder."""
+        mode, limit = settings["mode"], settings["limit"]
+        heavyweight = ladder.heavyweight_provider(settings["heavyweight"])
+        learner, seeds = self.tier_learner(), len(ladder.TIER_HINTS)
+        seeded = 0 if router.task_group_for(text) == "weather_lookup" else None   # a known trivial lookup
+        picked = ladder.decide(text, learner, mode, heavyweight, loads, limit, seeds=seeds, tier=seeded)
+        by, jev_ms = "local", None
+        if (seeded is None and use_jev and picked["unsure"] and self.jev_status()["state"] == "ok"
+                and self.store.jev_calls_today() < settings["jev_daily_cap"]):
+            asked = self._ask_jev_tier(text, settings)
+            if asked:
+                picked = ladder.decide(text, learner, mode, heavyweight, loads, limit, seeds=seeds, jev=asked[0])
+                by, jev_ms = "jev", asked[1]
+        moved = picked["moved_from"]
+        return {"pick": f"{picked['provider']}:{picked['model']}", "label": str(picked["tier"]), "effort": picked["effort"],
+                "by": by, "confidence": picked["confidence"], "probs": picked["probs"], "difficulty": picked["expected"],
+                "unsure": picked["unsure"], "moved_from": f"{moved['provider']}:{moved['model']}" if moved else None,
+                "tier": picked["tier"], "tier_name": picked["tier_name"], "ladder": True, "jev_ms": jev_ms}
+
+    def _ask_jev_tier(self, text, settings):
+        key, base_url = self._jev_key()
+        if not key:
+            return None
+        try:
+            self.store.count_jev_call()
+            questions = ladder.jev_questions(self.store.examples)
+            answers, ms = self._ask(key, text[:router.TEXT_KEEP], questions, model=settings["jev_model"], base_url=base_url)
+        except Exception as error:  # noqa: BLE001 - Jev failing must fall back to the local pick
+            if self._key:
+                self._key.update(state="down", problem=str(error)[:120], checked_at=self._clock())
+            return None
+        parsed = ladder.read_jev(answers)
+        return (parsed, ms) if parsed else None
 
     def _ask_jev(self, text, settings, learner, levels, loads, seeds):
         key, base_url = self._jev_key()
@@ -174,7 +252,7 @@ class Engine:
 
     def status(self):
         settings = self.settings()
-        learner, _ = self.learners(settings)
-        return {"settings": settings, "jev": self.jev_status(), "loads": self.loads(settings),
+        learner = self.tier_learner() if settings["ladder"] else self.learners(settings)[0]
+        return {"settings": settings, "ladder": ladder_table() if settings["ladder"] else None, "jev": self.jev_status(), "loads": self.loads(settings),
                 "stats": self.store.stats(), "recent": self.store.recent(),
                 "jev_calls_today": self.store.jev_calls_today(), "samples": round(learner.samples)}

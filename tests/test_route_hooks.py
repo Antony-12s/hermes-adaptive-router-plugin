@@ -61,6 +61,21 @@ class HookTests(unittest.TestCase):
         self.assertEqual(engine.calls, [("hi", "s1", "desktop", "opus")])
         self.assertEqual(harp._TURN_ROUTES, {})
 
+    def test_ladder_quota_event_offers_the_same_tier_on_the_other_provider(self):
+        broadcast = Mock()
+        settings = {"apply": True, "ladder": True, "candidates": []}
+        decision = {"pick": "anthropic:claude-opus-5-5", "effort": "xhigh", "tier": 4}
+        anthropic = {"pool_near_limit": True, "pool_has_room": False, "used": 96}
+        codex = {"pool_has_room": True, "used": 21}
+        engine = SimpleNamespace(loads=lambda _: {"anthropic": anthropic, "openai-codex": codex})
+        with patch.dict(sys.modules, {"hermes_cli.plugin_events": SimpleNamespace(broadcast_plugin_event=broadcast)}):
+            harp._publish_quota(engine, settings, "chat", "anthropic", decision)
+            notice = broadcast.call_args.args[2]["quota"]
+            self.assertEqual(notice["pick"], {"provider": "openai-codex", "model": "gpt-6.2-sol", "effort": "xhigh"})
+            codex["pool_has_room"] = False
+            harp._publish_quota(engine, settings, "chat", "anthropic", decision)
+            self.assertIsNone(broadcast.call_args.args[2]["quota"]["pick"])
+
     def test_quota_event_preserves_a_spare_account_and_caps_the_alternate_effort(self):
         broadcast = Mock()
         settings = {"apply": True, "candidates": [

@@ -39,7 +39,7 @@ class EngineTests(unittest.TestCase):
 
         self.entries = [KEY]
         self.engine = router_engine.Engine(self.home, lambda: self.entries, check, ask, self.clock)
-        self.engine.save({"candidates": CANDS})
+        self.engine.save({"ladder": False, "candidates": CANDS})
 
     def tearDown(self):
         self.tmp.cleanup()

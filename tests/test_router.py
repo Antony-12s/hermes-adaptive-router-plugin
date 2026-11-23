@@ -130,19 +130,19 @@ class StoreTests(unittest.TestCase):
     def test_weather_seed_selects_configured_haiku_at_low_effort(self):
         with tempfile.TemporaryDirectory() as tmp:
             engine = router_engine.Engine(tmp)
-            engine.save({"candidates": [CANDS[0], CANDS[1], {**CANDS[2], "model": "claude-haiku-5-5", "cap": "high"}]})
+            engine.save({"ladder": False, "candidates": [CANDS[0], CANDS[1], {**CANDS[2], "model": "claude-haiku-5-5", "cap": "high"}]})
             self.assertEqual(engine.store.stats()["samples"], 0)
             for prompt in ("what is the weather today?", "วันนี้ฝนตกไหม"):
                 decision = engine.decide(prompt, log=False, use_jev=False)
                 self.assertEqual((decision["pick"], decision["effort"]), ("anthropic:claude-haiku-5-5", "low"))
-            engine.save({"candidates": CANDS[:2]})
+            engine.save({"ladder": False, "candidates": CANDS[:2]})
             self.assertNotEqual(engine.decide("will it rain today?", log=False, use_jev=False)["pick"],
                                 "anthropic:claude-haiku-5-5")
 
     def test_weather_paraphrases_reuse_verified_provider_model_and_effort(self):
         with tempfile.TemporaryDirectory() as tmp:
             engine = router_engine.Engine(tmp)
-            engine.save({"candidates": CANDS})
+            engine.save({"ladder": False, "candidates": CANDS})
             prompt = "วันนี้สภาพอากาศเป็นยังไง"
             paraphrase = "วันนี้ฝนตกไหม"
             self.assertEqual(router.task_group_for(prompt), "weather_lookup")

@@ -479,6 +479,33 @@ test('diagram shows the router: key state, flow, candidates, load and learning',
     assert.match(text, part)
 })
 
+const LADDER = {
+  efforts: ['low', 'medium', 'high', 'xhigh', 'max'], modes: { save: 2, balanced: 4, best: 6 },
+  tiers: ['trivial', 'easy', 'routine', 'hard', 'very hard', 'extreme', 'maximum'].map((name, tier) => ({
+    tier, name,
+    anthropic: { provider: 'anthropic', model: tier < 2 ? 'claude-haiku-5-5' : 'claude-opus-5-5', effort: tier ? 'xhigh' : 'low', cost: tier + 1 },
+    'openai-codex': { provider: 'openai-codex', model: tier < 2 ? 'gpt-6-luna' : 'gpt-6.2-sol', effort: tier ? 'high' : 'low', cost: tier + 2 }
+  }))
+}
+
+test('with the cost ladder on, Diagram shows the ladder, provider-only heavyweight and tier corrections', async () => {
+  const base = routerData()
+  const app = routerPage(routerData({ ladder: LADDER, settings: { ...base.settings, ladder: true, heavyweight: '' } }))
+  let page = app.render()
+  const text = app.text(page)
+  assert.match(text, /COST LADDER/)
+  assert.match(text, /gpt-6-luna/)
+  assert.match(text, /mode stops at tier 4/)
+  assert.doesNotMatch(text, /MODELS IT CAN PICK/)
+  const heavyweight = app.nodes(page, n => n.type === 'select' && n.props['aria-label'] === 'Heavyweight')[0]
+  assert.deepEqual(app.nodes(heavyweight, n => n.type === 'option').map(n => n.props.value), ['', 'anthropic', 'openai-codex'])
+  app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Cost ladder')[0].props.onCheckedChange(false)
+  page = app.render()
+  await app.nodes(page, n => n.props?.['data-action'] === 'save-router')[0].props.onClick()
+  const body = JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/router/settings').body))
+  assert.equal(body.ladder, false)
+})
+
 test('no Jev key: the local learner decides and the page offers to add one', () => {
   const app = routerPage(routerData({ jev: { state: 'none' } }))
   const page = app.render()

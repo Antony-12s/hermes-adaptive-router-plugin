@@ -15,9 +15,9 @@ HARP adds model routing, account quota monitoring, and subagent route settings t
 | Feature | What you can do |
 | --- | --- |
 | Summary | Review usage, recent token totals, account health, and a weekly or monthly activity heatmap. |
-| Diagram | Inspect the latest routing decision, edit candidate models and effort limits, and give the local learner feedback. |
+| Diagram | Inspect the latest routing decision and the cost ladder, and give the local learner feedback. With the ladder off, edit candidate models and effort limits instead. |
 | Account pools | Check 5-hour and weekly quota windows and reset times per account when the provider reports them. Set weights of 1×, 5×, 10×, or 20×. |
-| Heavyweight routing | Choose a preferred candidate for demanding work or use quota-based selection for eligible coding routes. |
+| Heavyweight routing | Prefer one provider for demanding work, or let the provider with more weighted quota left run it. |
 | Delegation | Save work types with a provider, model, and effort for Hermes subagents. Choose Local matching or Jev. |
 | Quota pane | Open provider accordions, see the current chat’s quota context, and inspect recent main and auxiliary model calls in Live Routing. |
 | Schedules and alerts | Schedule account parking and receive quota notifications through your desktop or Hermes Telegram channel. |
@@ -51,11 +51,11 @@ Use the same Hermes profile for installation, provider authentication, and the g
 
 ```mermaid
 flowchart TD
-    A["Send a message in Hermes"] --> B["HARP's local learner suggests a route"]
+    A["Send a message in Hermes"] --> B["HARP's local learner estimates a difficulty tier"]
     B --> C{"Unsure and Jev available?"}
-    C -->|Yes| D["Ask Jev for a model and difficulty score"]
-    C -->|No| E["Use the local recommendation"]
-    D -->|Result available| F["Check model limits and provider quota"]
+    C -->|Yes| D["Ask Jev which tier the message needs"]
+    C -->|No| E["Use the local estimate, one tier up when unsure"]
+    D -->|Result available| F["Pick the provider from quota, then the model and effort from the cost ladder"]
     D -->|No result| E
     E --> F
     F --> G["Record the proposed provider, model and effort in Diagram"]
@@ -66,12 +66,23 @@ flowchart TD
     J --> K
 ```
 
+### The cost ladder
+
+HARP rates each message from tier 0 (trivial) to tier 6 (maximum) and maps the tier to the cheapest model and
+effort that should handle it. Cheap models think harder before work moves to a pricier model: tier 1 is Haiku 5.5
+at high effort, tier 3 is Opus 5.5 at medium, tier 4 is Opus 5.5 at xhigh. From tier 2 up, the provider with more
+weighted quota left runs the job. **Heavyweight** can prefer one provider from tier 3 up. **Focus** sets the highest
+tier: Save stops at tier 2, Balanced at tier 4, and Best can use every tier. Effort runs low, medium, high, xhigh,
+and max. See [training/README.md](training/README.md) for the full table, prices, and sources.
+
+Turn **Cost ladder** off in **Diagram** to route among your own candidate models instead.
+
 **Diagram** shows what HARP proposed. **Live Routing** shows the model Hermes actually called. In Shadow mode, HARP records its recommendation and Hermes continues with the chat's current route. A cross-provider quota switch is handled separately for a later message.
 
 ## Set up HARP
 
 1. In **Anthropic** or **Codex**, use **Add account** if needed and **Live usage** to refresh quota readings. If Hermes omits an Anthropic plan, you can select a display plan for that account in **Quota → User Tracker**. Set routing weights separately in **Diagram → Provider load**.
-2. In **Diagram**, select models that appear in your Hermes model picker, describe the tasks each handles, and set their effort ceilings. Leave **Heavyweight** on **Auto by quota** or choose a preferred model. Save your changes.
+2. In **Diagram**, review the cost ladder and choose a **Focus**. Leave **Heavyweight** on **Auto by quota** or prefer one provider. Save your changes. The ladder uses models your Hermes install lists for Anthropic and Codex; turn the ladder off to pick your own models.
 3. Start in **Shadow** mode and send a normal Hermes chat message. Compare the recorded recommendation in **Diagram** with the request observed in **Quota → Live Routing**. Enable **Apply** when you are ready for HARP to change the model and effort within the chat’s current provider.
 4. In **Settings**, choose a progress bar or a ring for quota display and set the current chat’s auto-switch preference. For a quota warning, **Switch now** applies the offered route to the next message, and **Ignore** dismisses the warning. Hermes may require confirmation for a provider change.
 
@@ -90,11 +101,9 @@ reviewed examples to Jev to guide later classifications.
 
 For recognized short weather lookups, HARP can reuse the verified provider,
 model, and effort across equivalent Thai or English phrasings. Before any
-result has been verified, HARP recommends Anthropic Claude Haiku 5.5 with
-Low effort if that model is configured in **Diagram → Models it can pick**.
-Use the model entry exposed by your Hermes provider. The active effort limits
-and provider quota still apply, and unavailable candidates fall through to
-the normal routing logic.
+result has been verified, HARP recommends the ladder's tier 0: Anthropic Claude
+Haiku 5.5 at low effort. With the ladder off, it uses that model only if it is
+configured in **Diagram → Models it can pick**. Provider quota still applies.
 
 A successful API response alone does not verify that the task succeeded. HARP
 learns which routes to recommend from these examples. It leaves model weights

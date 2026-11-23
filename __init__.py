@@ -192,12 +192,21 @@ def _publish_quota(engine, settings, session, provider, decision):
     active = loads.get(provider, {})
     quota = None
     if active.get("pool_near_limit"):
+        pick = None
+        if settings.get("ladder") and decision.get("tier") is not None:
+            ladder = _sibling("ladder")
+            other = next((name for name in ladder.RUNGS if name != provider
+                          and loads.get(name, {}).get("pool_has_room")), None)
+            if other:
+                pick = ladder.rung(other, decision["tier"])
+            quota = {"provider": provider, "used": active["used"], "pick": pick, "auto": settings["apply"]}
+            broadcast_plugin_event("harp", "quota", {"session_id": session, "quota": quota})
+            return
         candidates = {f"{row['provider']}:{row['model']}": row for row in settings["candidates"]}
         ranked = [decision["pick"], *sorted(candidates, key=lambda item: -decision.get("probs", {}).get(item, 0))]
         alternate = next((candidates[item] for item in ranked if item in candidates
                           and candidates[item]["provider"] != provider
                           and loads.get(candidates[item]["provider"], {}).get("pool_has_room")), None)
-        pick = None
         if alternate:
             effort = ("low", "medium", "high")
             level = decision["effort"] if decision["effort"] in effort else "medium"
@@ -222,7 +231,7 @@ def route_turn(session_id=None, user_message=None, platform=None, model=None, **
     try:
         engine = _engine()
         settings = engine.settings()
-        if not settings["enabled"] or not settings["candidates"]:
+        if not settings["enabled"] or not (settings["candidates"] or settings.get("ladder")):
             return None
         session = str(session_id or "")
         _TURN_ROUTES.pop(session, None)

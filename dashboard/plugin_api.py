@@ -658,7 +658,7 @@ def try_router(body: dict):
 @router.post("/router/feedback")
 def router_feedback(body: dict):
     try:
-        correct = _engine().store.feedback(int((body or {}).get("id")), str((body or {}).get("label") or ""))
+        correct = _engine().feedback(int((body or {}).get("id")), str((body or {}).get("label") or ""))
     except (KeyError, TypeError, ValueError):
         raise HTTPException(400, "Unknown decision.")
     return {"learned": correct}
@@ -667,7 +667,7 @@ def router_feedback(body: dict):
 @router.post("/router/verify")
 def router_verify(body: dict):
     try:
-        return {"learned": _engine().store.verify_route(int(body.get("id")))}
+        return {"learned": _engine().verify(int(body.get("id")))}
     except (KeyError, TypeError, ValueError):
         raise HTTPException(400, "Unknown decision.")
 

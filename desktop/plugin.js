@@ -484,6 +484,23 @@ const KEY_TEXT = {
 }
 const candId = c => `${c.provider}:${c.model}`
 const shortId = id => (id || '').split(':').slice(1).join(':')
+const tierText = id => (/^\d$/.test(id || '') ? `tier ${id}` : shortId(id))
+const HEAVYWEIGHT_PROVIDERS = ['anthropic', 'openai-codex']
+const MODE_HINTS = {
+  ladder: { save: 'Stops at the routine tier: cheap models and Sonnet or Terra.', balanced: 'Stops at very hard: up to Opus or Sol at xhigh.', best: 'Can use every tier, including Fable and Astra.' },
+  candidates: { save: 'Small models first, light thinking.', balanced: 'Pick by the task, medium thinking at most.', best: 'Strongest when unsure, full thinking.' }
+}
+
+function LadderView({ ladder, mode }) {
+  const top = ladder.modes[mode]
+  const rung = r => `${r.model} · ${r.effort}`
+  return h(Section, { title: 'COST LADDER' },
+    h('div', { className: 'harp-tools' }, `Cheap models think harder before work moves to a pricier model. ${mode} mode stops at tier ${top}. Costs are relative estimates, not prices.`),
+    h(Table, { label: 'Cost ladder', headings: ['Tier', 'Anthropic', 'Codex', 'Relative cost'],
+      rows: ladder.tiers.map(t => ({ key: t.tier, cells: [
+        `${t.tier} ${t.name}${t.tier > top ? ' (above this mode)' : ''}`, rung(t.anthropic), rung(t['openai-codex']),
+        `${t.anthropic.cost} / ${t['openai-codex'].cost}`] })) }))
+}
 
 function RouterFlow({ decision, jev }) {
   const pick = decision?.pick || ''
@@ -535,6 +552,8 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
   return h('div', null,
     h('div', { className: 'harp-tools' },
       h(Switch, { checked: s.enabled, 'aria-label': 'Router on', onCheckedChange: value => edit({ enabled: value }) }), 'Router',
+      typeof s.ladder === 'boolean' && h(Switch, { checked: s.ladder, 'aria-label': 'Cost ladder', onCheckedChange: value => edit({ ladder: value }) }),
+      typeof s.ladder === 'boolean' && 'Cost ladder',
       h(SegmentedControl, { options: [{ id: 'shadow', label: 'Shadow: record only' }, { id: 'apply', label: 'Apply on the same provider' }],
         value: s.apply ? 'apply' : 'shadow', onChange: value => edit({ apply: value === 'apply' }) }),
       h('span', { className: 'harp-grow' }),
@@ -548,7 +567,7 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
     h(Section, { title: 'LATEST ROUTED MESSAGE' }, h(RouterFlow, { decision: data.recent[0], jev: data.jev })),
     delegation.data?.latest && h(Section, { title: 'LATEST HERMES DELEGATION' },
       h(DelegatedResult, { result: delegation.data.latest })),
-    h(Section, { title: 'MODELS IT CAN PICK' },
+    data.ladder ? h(LadderView, { ladder: data.ladder, mode: s.mode }) : h(Section, { title: 'MODELS IT CAN PICK' },
       h('div', { className: 'harp-tools' }, 'Strongest first: when unsure it uses the top one. The description tells Jev and the learner what each is for.'),
       ...s.candidates.map((c, i) => h('div', { className: 'harp-cand', key: candId(c) + i },
         h('span', { className: 'harp-muted' }, i + 1),
@@ -564,14 +583,18 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
         h(Codicon, { name: 'add', size: '0.8rem' }), 'Add model'))),
     h('section', { id: 'harp-provider-weights', 'aria-label': 'Focus and provider load' },
       h('div', { className: 'harp-routing-controls' },
-        h('b', { title: { save: 'Small models first, light thinking.', balanced: 'Pick by the task, medium thinking at most.', best: 'Strongest when unsure, full thinking.' }[s.mode] }, 'Focus'),
+        h('b', { title: MODE_HINTS[data.ladder ? 'ladder' : 'candidates'][s.mode] }, 'Focus'),
         h(SegmentedControl, { options: [{ id: 'save', label: 'Save' }, { id: 'balanced', label: 'Balanced' }, { id: 'best', label: 'Best' }],
           value: s.mode, onChange: value => edit({ mode: value }) }),
         h('label', null, 'Heavyweight',
-          h(Pick, { value: s.candidates.some(c => candId(c) === s.heavyweight) ? s.heavyweight : '', label: 'Heavyweight',
-            options: [{ value: '', label: 'Auto by quota' }, ...s.candidates.map(c => ({
-              value: candId(c), label: `${ROUTER_LABEL[c.provider] || c.provider} · ${c.model}`,
-            }))], onChange: heavyweight => edit({ heavyweight }) })),
+          data.ladder
+            ? h(Pick, { value: HEAVYWEIGHT_PROVIDERS.includes((s.heavyweight || '').split(':')[0]) ? s.heavyweight.split(':')[0] : '', label: 'Heavyweight',
+              options: [{ value: '', label: 'Auto by quota' }, ...HEAVYWEIGHT_PROVIDERS.map(p => ({ value: p, label: ROUTER_LABEL[p] || p }))],
+              onChange: heavyweight => edit({ heavyweight }) })
+            : h(Pick, { value: s.candidates.some(c => candId(c) === s.heavyweight) ? s.heavyweight : '', label: 'Heavyweight',
+              options: [{ value: '', label: 'Auto by quota' }, ...s.candidates.map(c => ({
+                value: candId(c), label: `${ROUTER_LABEL[c.provider] || c.provider} · ${c.model}`,
+              }))], onChange: heavyweight => edit({ heavyweight }) })),
         h('label', null, 'Provider load limit',
           h(Pick, { value: String(s.limit), label: 'Load limit', options: [70, 80, 85, 90, 95].map(v => ({ value: String(v), label: `${v}%` })), onChange: v => edit({ limit: Number(v) }) }))),
       h('div', { className: 'harp-load' }, ...Object.keys(ROUTER_LABEL).map(provider => {
@@ -597,7 +620,7 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
         h(SummaryCard, { title: 'Decided locally, 7 days', value: st.decisions ? `${Math.round(st.local / st.decisions * 100)}%` : '–', detail: `${st.local} of ${st.decisions} · free` }),
         h(SummaryCard, { title: 'Jev calls today', value: `${data.jev_calls_today}`, detail: `daily cap ${s.jev_daily_cap}` }),
         h(SummaryCard, { title: 'Right when rated', value: st.rated ? `${Math.round(st.right / st.rated * 100)}%` : '–', detail: `${st.rated} rated` })),
-      st.corrections.length ? h('div', { className: 'harp-tools' }, 'Corrections: ', st.corrections.map(c => `${shortId(c.from)} → ${shortId(c.to)} ×${c.times}`).join(' · ')) : null,
+      st.corrections.length ? h('div', { className: 'harp-tools' }, 'Corrections: ', st.corrections.map(c => `${shortId(c.from)} → ${tierText(c.to)} ×${c.times}`).join(' · ')) : null,
       data.recent.length
         ? h(Table, { label: 'Recent picks', headings: ['Message', 'Picked', 'By', 'Was on', ''], rows: data.recent.map(row => ({ key: row.id, cells: [
             h('span', { className: 'harp-status' }, row.text),
@@ -609,10 +632,12 @@ function RouterView({ onAddKey, showWeights, onWeightsShown }) {
                       h(Button, { size: 'sm', disabled: !!busy, onClick: () => verify(row) }, 'Confirm result'),
                       h(Button, { size: 'sm', onClick: () => setVerifying(null) }, 'Cancel'))
                   : h(Button, { size: 'sm', variant: 'ghost', onClick: () => setVerifying(row.id) }, 'Verify result'),
-            row.feedback ? h('span', { className: 'harp-muted' }, row.feedback === 'ok' ? 'right' : `should be ${shortId(row.feedback)}`)
+            row.feedback ? h('span', { className: 'harp-muted' }, row.feedback === 'ok' ? 'right' : `should be ${tierText(row.feedback)}`)
               : fixing === row.id
                 ? h(Pick, { value: '', placeholder: 'Should be…', label: `Correct pick: ${row.text}`, onChange: v => v && vote(row, v),
-                    options: s.candidates.filter(c => candId(c) !== row.pick).map(c => ({ value: candId(c), label: shortId(candId(c)) })) })
+                    options: data.ladder
+                      ? data.ladder.tiers.map(t => ({ value: String(t.tier), label: `${t.tier} ${t.name}` }))
+                      : s.candidates.filter(c => candId(c) !== row.pick).map(c => ({ value: candId(c), label: shortId(candId(c)) })) })
                 : h('span', { className: 'harp-row-actions' },
                     h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Right pick: ${row.text}`, onClick: () => vote(row, '') }, h(Codicon, { name: 'thumbsup', size: '0.8rem' })),
                     h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Wrong pick: ${row.text}`, onClick: () => setFixing(row.id) }, 'Wrong')))] })) })
