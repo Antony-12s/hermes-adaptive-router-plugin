@@ -146,10 +146,33 @@ def request_effort(request):
     return ""
 
 
+def config_effort(reasoning_config, provider, model, max_tokens):
+    """The effort the agent is configured to send, for when Hermes truncated the request payload.
+
+    Hermes caps the payload it hands to hooks at 50,000 characters and replaces anything longer with a
+    preview, so a long chat has no readable body. Anthropic goes through the adapter's own mapping so
+    xhigh downgrades and models that take no thinking block (Haiku) read the same as what was sent."""
+    if not isinstance(reasoning_config, dict):
+        return ""
+    if provider == "anthropic":
+        try:
+            from agent.anthropic_adapter import _thinking_kwargs
+            return request_effort({"body": _thinking_kwargs(reasoning_config, str(model or ""), max_tokens or 16000)})
+        except Exception:  # noqa: BLE001 - private Hermes helper; fall back to the configured value
+            pass
+    if reasoning_config.get("enabled") is False:
+        return "off"
+    return str(reasoning_config.get("effort") or "")
+
+
 def remember_live_request(api_request_id=None, user_message=None, request=None, middleware_trace=None, **metadata):
     if not api_request_id:
         return
     effort = metadata.get("reasoning_effort") or request_effort(request)
+    if not effort and metadata.get("session_id"):
+        agent = _find_agent(str(metadata["session_id"]))
+        effort = config_effort(getattr(agent, "reasoning_config", None), metadata.get("provider"),
+                               metadata.get("model"), metadata.get("max_tokens"))
     text = _sibling("router").message_text(user_message)
     source = ""
     for trace in middleware_trace or ():

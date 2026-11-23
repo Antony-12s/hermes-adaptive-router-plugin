@@ -62,6 +62,36 @@ class HookTests(unittest.TestCase):
             with self.subTest(request=request):
                 self.assertEqual(harp.request_effort(request), want)
 
+    def test_effort_falls_back_to_the_agent_reasoning_config_when_hermes_truncates_the_payload(self):
+        self.assertEqual(harp.request_effort({"_truncated": True, "original_type": "dict", "preview": '{"method": "POST", "bo'}), "")
+        self.assertEqual(harp.config_effort({"enabled": True, "effort": "high"}, "openai-codex", "gpt-6-sol", 4096), "high")
+        self.assertEqual(harp.config_effort({"enabled": False}, "openai-codex", "gpt-6-sol", 4096), "off")
+        self.assertEqual(harp.config_effort(None, "anthropic", "claude-opus-5-5", 4096), "")
+        self.assertEqual(harp.config_effort({}, "openai-codex", "gpt-6-sol", 4096), "")
+
+    def test_anthropic_effort_is_what_the_adapter_would_actually_send(self):
+        adapter = SimpleNamespace(_thinking_kwargs=lambda cfg, model, tokens: (
+            {} if "haiku" in model else {"thinking": {"type": "adaptive"}, "output_config": {"effort": "max" if cfg["effort"] == "xhigh" else cfg["effort"]}}))
+        with patch.dict(sys.modules, {"agent": SimpleNamespace(), "agent.anthropic_adapter": adapter}):
+            self.assertEqual(harp.config_effort({"effort": "xhigh"}, "anthropic", "claude-opus-4-6", 8000), "max")
+            self.assertEqual(harp.config_effort({"effort": "high"}, "anthropic", "claude-haiku-5-5", 8000), "")
+
+    def test_live_log_reads_effort_from_the_session_agent_when_the_request_body_is_gone(self):
+        agent = SimpleNamespace(reasoning_config={"enabled": True, "effort": "high"})
+        with patch.object(harp, "_find_agent", return_value=agent):
+            harp.remember_live_request(api_request_id="big", user_message="hi", session_id="s1", provider="openai-codex",
+                                       model="gpt-6-sol", max_tokens=4096, request={"_truncated": True, "preview": "{"})
+        self.assertEqual(harp._LIVE_REQUESTS["big"][1], "high")
+
+    def test_live_card_lists_four_calls(self):
+        with tempfile.TemporaryDirectory() as home:
+            from pathlib import Path
+
+            store = harp._sibling("router").Store(Path(home) / "router.sqlite3")
+            for index in range(6):
+                store.log_live("main", f"call {index}", "anthropic", "haiku", "", 1.0, 10, index, "ok", "")
+            self.assertEqual([call["text"] for call in store.live()], ["call 5", "call 4", "call 3", "call 2"])
+
     def run_turn(self, engine, provider="anthropic", depth=0):
         agent = SimpleNamespace(provider=provider, _delegate_depth=depth)
         with patch.object(harp, "_engine", return_value=engine), patch.object(harp, "_find_agent", return_value=agent), \

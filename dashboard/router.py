@@ -196,7 +196,7 @@ class Store:
                        (time.time(), kind, text, provider, model, effort, duration, tokens, step, status, source))
             db.execute("DELETE FROM live_calls WHERE id <= (SELECT MAX(id) - 100 FROM live_calls)")
 
-    def live(self, limit=6):
+    def live(self, limit=4):
         with self._db() as db:
             db.row_factory = sqlite3.Row
             return [dict(row) for row in db.execute("SELECT * FROM live_calls ORDER BY id DESC LIMIT ?", (limit,))]
