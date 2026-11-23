@@ -163,7 +163,10 @@ test('Quota pane shows two independent limits per account with bar and ring view
   assert.match(app.text(windows(before)[3]), /Weekly limit.*76%/)
   assert.match(app.text(windows(before)[3]), /Reset time unavailable/)
   assert.match(app.text(windows(before)[4]), /5-hour limit.*0%/)
-  assert.match(app.text(before), /Live routing.*Preview the Conversation.*aux:next_prompt.*effort unavailable.*claude-haiku.*why does the app crash.*main · Jev · step 1 · effort medium.*gpt-6-sol/)
+  assert.match(app.text(before), /Live routing.*Preview the Conversation.*claude-haiku.*aux:next_prompt.*anthropic.*effort not set · 1\.5s · 150 tok.*why does the app crash.*gpt-6-sol.*main · Jev · step 1.*Codex.*effort medium/)
+  const liveRows = app.nodes(before, node => node.type === 'li' && node.props?.className === 'harp-live-call')
+  assert.equal(liveRows.length, 2)
+  for (const row of liveRows) assert.equal(app.nodes(row, node => node.props?.className?.startsWith('harp-live-line')).length, 3)
   for (const detail of ['Codex', 'Anthropic', '1.5s', '150 tok']) {
     assert.ok(app.text(before).includes(detail), detail)
   }

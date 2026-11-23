@@ -126,14 +126,30 @@ _LIVE_REQUESTS = {}        # request id -> bounded prompt and effort from the ou
 _LIVE_REQUESTS_LOCK = threading.Lock()
 
 
+def request_effort(request):
+    """The effort a provider request asks for. Hermes passes {"method", "body"}; Anthropic puts it in
+    output_config.effort (adaptive) or a thinking budget, Codex/chat in reasoning(.effort)."""
+    body = request.get("body", request) if isinstance(request, dict) else {}
+    if not isinstance(body, dict):
+        return ""
+    pick = lambda value, key: value.get(key) if isinstance(value, dict) else None
+    effort = (pick(body.get("output_config"), "effort") or pick(body.get("reasoning"), "effort")
+              or body.get("reasoning_effort") or pick(pick(body.get("extra_body"), "reasoning"), "effort"))
+    if effort:
+        return str(effort)
+    thinking = body.get("thinking") if isinstance(body.get("thinking"), dict) else {}
+    if thinking.get("type") == "disabled":
+        return "off"
+    budget = thinking.get("budget_tokens")
+    if type(budget) is int and budget > 0:
+        return f"{budget // 1000}k budget" if budget >= 1000 else f"{budget} budget"
+    return ""
+
+
 def remember_live_request(api_request_id=None, user_message=None, request=None, middleware_trace=None, **metadata):
     if not api_request_id:
         return
-    request = request if isinstance(request, dict) else {}
-    reasoning = request.get("reasoning")
-    effort = metadata.get("reasoning_effort") or request.get("reasoning_effort")
-    if not effort and isinstance(reasoning, dict):
-        effort = reasoning.get("effort")
+    effort = metadata.get("reasoning_effort") or request_effort(request)
     text = _sibling("router").message_text(user_message)
     source = ""
     for trace in middleware_trace or ():

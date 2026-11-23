@@ -45,6 +45,23 @@ class HookTests(unittest.TestCase):
                              ("review the PR", "sol-actual", "jev", "medium", 2))
             self.assertEqual((auxiliary["kind"], auxiliary["text"], auxiliary["tokens"]), ("aux:next_prompt", "", 15))
 
+    def test_effort_is_read_from_the_body_hermes_passes_to_pre_api_request(self):
+        wrap = lambda body: {"method": "POST", "body": body}
+        cases = [
+            (wrap({"thinking": {"type": "adaptive"}, "output_config": {"effort": "xhigh"}}), "xhigh"),   # Anthropic 4.6+
+            (wrap({"thinking": {"type": "enabled", "budget_tokens": 16000}}), "16k budget"),            # older Claude
+            (wrap({"thinking": {"type": "disabled"}}), "off"),
+            (wrap({"reasoning": {"effort": "high", "summary": "auto"}}), "high"),                     # Codex Responses
+            (wrap({"reasoning_effort": "low"}), "low"),                                                # chat completions
+            (wrap({"extra_body": {"reasoning": {"effort": "medium"}}}), "medium"),                     # OpenRouter
+            (wrap({"model": "claude-haiku-4-5"}), ""),                                                  # no thinking sent
+            ({"reasoning": {"effort": "medium"}}, "medium"),                                           # bare body
+            (None, ""),
+        ]
+        for request, want in cases:
+            with self.subTest(request=request):
+                self.assertEqual(harp.request_effort(request), want)
+
     def run_turn(self, engine, provider="anthropic", depth=0):
         agent = SimpleNamespace(provider=provider, _delegate_depth=depth)
         with patch.object(harp, "_engine", return_value=engine), patch.object(harp, "_find_agent", return_value=agent), \

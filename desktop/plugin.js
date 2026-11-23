@@ -204,19 +204,19 @@ function LiveRouting() {
     h('ol', { className: 'harp-live-calls' }, ...calls.map(call => {
       const timestamp = stamp(call.ts * 1000, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       const classifier = { jev: 'Jev', local: 'Local' }[call.source]
-      const meta = [timestamp, call.kind, classifier, call.step && `step ${call.step}`, call.effort ? `effort ${call.effort}` : 'effort unavailable',
+      const route = [timestamp, call.kind, classifier, call.step && `step ${call.step}`].filter(Boolean).join(' · ')
+      const cost = [call.effort ? `effort ${call.effort}` : 'effort not set',
         Number.isFinite(call.duration) && `${call.duration.toFixed(1)}s`,
-        Number.isFinite(call.tokens) && `${number.format(call.tokens)} tok`, call.status === 'error' && 'failed']
-      const details = meta.filter(Boolean).join(' · ')
+        Number.isFinite(call.tokens) && `${number.format(call.tokens)} tok`, call.status === 'error' && 'failed'].filter(Boolean).join(' · ')
       const auxiliary = call.kind.replace(/^aux:/, '')
       const text = call.kind === 'main'
         ? call.text || 'Hermes request'
         : auxiliary === 'next_prompt' ? 'Preview the Conversation' : auxiliary.replace(/[_-]+/g, ' ')
-      return h('li', { key: call.id },
-        h('div', { className: 'harp-live-request' }, h('strong', { title: text }, text),
-          h('small', { className: 'harp-muted', title: details }, details)),
-        h('div', { className: 'harp-live-target' }, h('strong', { title: call.model }, call.model),
-          h('small', { className: 'harp-muted' }, ROUTER_LABEL[call.provider] || call.provider)))
+      const provider = ROUTER_LABEL[call.provider] || call.provider
+      return h('li', { key: call.id, className: 'harp-live-call' },
+        h('div', { className: 'harp-live-line' }, h('strong', { title: text }, text), h('strong', { title: call.model }, call.model)),
+        h('div', { className: 'harp-live-line harp-muted' }, h('small', { title: route }, route), h('small', null, provider)),
+        h('div', { className: 'harp-live-line harp-muted' }, h('small', { title: cost }, cost)))
     })))
 }
 
@@ -291,18 +291,18 @@ const CSS = `
 .harp-tracker-window:has(.harp-tracker-ring){min-height:38px}
 .harp-tracker-reset{grid-column:2;text-align:right;color:var(--ui-text-tertiary);margin:0 0 3px;font-variant-numeric:tabular-nums}
 .harp-live-calls{list-style:none;margin:3px 0 0;padding:0}
-.harp-live-calls li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.8fr);align-items:start;gap:6px;padding:4px 0;font-size:.71rem}
+.harp-live-calls li{display:grid;gap:1px;padding:4px 0;font-size:.71rem}
 @media(prefers-reduced-motion:no-preference){
 .harp-live-calls li{animation:harp-live-arrival 220ms ease-out both}
 @keyframes harp-live-arrival{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 }
 .harp-live-calls li+li{border-top:1px solid var(--ui-stroke-tertiary)}
-.harp-live-request,.harp-live-target{min-width:0}
-.harp-live-request>*,.harp-live-target>*{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.harp-live-target{text-align:right}
+.harp-live-line{display:flex;justify-content:space-between;gap:8px;min-width:0}
+.harp-live-line>*{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.harp-live-line>:last-child:not(:first-child){flex:none;max-width:45%;text-align:right}
 .harp-delegation-flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:8px;margin:8px 0;padding-left:20px}
 .harp-delegation-flow p{margin:4px 0 0}
-.harp-live-request>small{font-variant-numeric:tabular-nums}
+.harp-live-line small{font-variant-numeric:tabular-nums}
 .harp-tracker-ring{justify-self:end;display:grid;place-items:center;width:34px;height:34px;border-radius:50%;font-size:.65rem;background:radial-gradient(circle,var(--ui-bg-card) 57%,transparent 59%),conic-gradient(var(--ui-accent) var(--harp-quota-used),var(--ui-bg-quaternary) 0)}
 .harp-page{display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--ui-surface-background);color:var(--ui-text-secondary);font-size:.75rem}
 .harp-page *{box-sizing:border-box}
