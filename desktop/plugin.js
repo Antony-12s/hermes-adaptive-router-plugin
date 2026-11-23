@@ -110,15 +110,35 @@ function refreshQuotaReadings() {
 
 const tokenCount = count => count >= 1e6 ? `${(count / 1e6).toFixed(1).replace(/\.0$/, '')}M` : count >= 1e3 ? `${Math.round(count / 1e3)}K` : String(count)
 
+// A manual compression can outlast the desktop's 30 s request timeout while Hermes keeps summarizing,
+// so a timeout means "still working": watch the usage until the count drops or compressions goes up.
+const COMPRESS_WAIT_MS = 180000
+const DRAIN_MS = 800
+function compressDone(start, usage) {
+  if (!start || !usage) return false
+  return (usage.compressions || 0) > (start.compressions || 0) ||
+    (Number.isFinite(usage.context_used) && usage.context_used < start.used * 0.8)
+}
+
 function ContextCard({ session, working }) {
-  const [compressing, setCompressing] = useState(false)
+  // phase: idle -> compressing -> draining (bar slides to 0) -> reading (holds 0 until a new count) -> idle
+  const [phase, setPhase] = useState('idle')
+  const [start, setStart] = useState(null)
+  const [polled, setPolled] = useState(null)
+  const compressing = phase === 'compressing'
   const [note, setNote] = useState('')
   // session.usage is not a desktop plugin RPC ("unknown method"); the desktop keeps the focused chat's
   // usage, context fields included, in host.state.focusedUsage.
   const readUsage = () => host.state?.focusedUsage?.get?.() || null
   const [usageData, setUsageData] = useState(readUsage())
   useEffect(() => host.state?.focusedUsage?.listen?.(() => setUsageData(readUsage())), [])
-  const usage = { data: usageData || readUsage() }
+  const reported = usageData || readUsage()
+  // Hermes may only refresh focusedUsage on the next reply; a polled breakdown fills in until then.
+  const usage = { data: polled && reported?.context_used === start?.used ? { ...reported, ...polled } : reported }
+  useEffect(() => {
+    if (phase === 'compressing' && compressDone(start, usage.data)) start.finish?.()
+    else if (phase === 'reading' && Number.isFinite(usage.data?.context_used) && usage.data.context_used !== start?.used) setPhase('idle')
+  }, [phase, usageData, polled])
   const settings = useQuery({ queryKey: [ID, 'compression'], queryFn: () => rest('/compression'), refetchInterval: 60000 })
   if (!session) return h('div', null, h('strong', null, 'Context'), h('div', { className: 'harp-muted' }, 'Open a chat to see its context.'))
   const used = usage.data?.context_used
@@ -128,25 +148,49 @@ function ContextCard({ session, working }) {
   const threshold = settings.data?.enabled === false ? null : settings.data?.threshold
   const compressions = usage.data?.compressions || 0
   const compressNow = async () => {
-    setCompressing(true)
+    const run = { used, compressions, done: false }
+    const stop = message => { run.done = true; clearInterval(run.poll); setPhase('idle'); setNote(message) }
+    run.finish = message => {
+      if (run.done) return
+      run.done = true
+      clearInterval(run.poll)
+      setNote(message || 'Compressed.')
+      setPhase('draining')
+      setTimeout(() => setPhase('reading'), DRAIN_MS)
+    }
+    setStart(run)
+    setPolled(null)
+    setPhase('compressing')
     setNote('')
     try {
       const result = await host.request('session.compress', { session_id: session })
-      setNote(result?.message || (result?.compressed === false ? 'Nothing to compress yet.' : 'Compressed.'))
+      if (result?.compressed === false || result?.lock_held) stop(result.message || 'Nothing to compress yet.')
+      else run.finish(result?.message)
     } catch (error) {
-      setNote(failure(error))
+      if (!/timed out/i.test(failure(error))) return stop(failure(error))
+      setNote('Still compressing…')
+      run.poll = setInterval(async () => {
+        try {
+          const breakdown = await host.request('session.context_breakdown', { session_id: session })
+          if (compressDone(run, breakdown)) { setPolled({ context_used: breakdown.context_used, context_percent: breakdown.context_percent }); run.finish() }
+        } catch {}
+      }, 4000)
+      run.poll?.unref?.()  // Node tests only; browsers return a number
+      setTimeout(() => { if (!run.done) stop('Hermes did not confirm the compression; the count updates on the next reply.') }, COMPRESS_WAIT_MS)?.unref?.()
     } finally {
-      setCompressing(false)
       setUsageData(readUsage())
     }
   }
+  const emptied = phase === 'draining' || phase === 'reading'
+  const shown = emptied ? 0 : percent
   return h('div', null,
     h('strong', null, 'Context'),
     h('div', { className: 'harp-live-line' },
-      h('b', null, known ? `${tokenCount(used)} / ${tokenCount(maximum)} tokens · ${percent}%` : 'Not reported yet'),
+      h('b', null, !known ? 'Not reported yet' : emptied ? `0 / ${tokenCount(maximum)} tokens · reading again…`
+        : `${tokenCount(used)} / ${tokenCount(maximum)} tokens · ${percent}%`),
       h(Button, { size: 'sm', disabled: !known || working || compressing, onClick: compressNow }, compressing ? 'Compressing…' : 'Compress now')),
-    known && h('div', { className: 'harp-bar', style: { width: '100%', position: 'relative' }, role: 'progressbar', 'aria-valuenow': percent, 'aria-valuemin': 0, 'aria-valuemax': 100 },
-      h('i', { style: { width: `${percent}%` } }),
+    known && h('div', { className: 'harp-bar', style: { width: '100%', position: 'relative' }, role: 'progressbar', 'aria-valuenow': shown, 'aria-valuemin': 0, 'aria-valuemax': 100 },
+      h('i', { style: { width: `${shown}%`, transition: `width ${DRAIN_MS}ms ease` } }),
       threshold && h('b', { style: { position: 'absolute', top: -3, bottom: -3, width: 2, left: `${threshold * 100}%`, background: 'var(--ui-orange)' } })),
     h('small', { className: 'harp-muted' }, threshold ? `Auto-compresses at ${Math.round(threshold * 100)}%` : 'Auto-compress off',
       compressions ? ` · compressed ${compressions}×` : '', working ? ' · waiting for the reply' : ''),

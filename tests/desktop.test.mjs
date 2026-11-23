@@ -28,7 +28,7 @@ function fixture(usage, session = {}) {
     },
     Fragment: ({ children }) => children,
     host: { navigate: path => requests.push(path), notify: message => requests.push({ notify: message }),
-      request: async (op, args) => { requests.push({ op, ...args }); return {} },
+      request: async (op, args) => { requests.push({ op, ...args }); if (session.fail?.[op]) throw new Error(session.fail[op]); return session.reply?.[op] ?? {} },
       state: session.id ? {
         focusedSessionId: { get: () => session.id },
         busyBySession: { get: () => ({ [session.id]: session.busy }), listen: fn => { busyListener = fn } },
@@ -151,6 +151,35 @@ test('context card shows tokens, percent, the auto-compress mark and Compress no
   compress[0].props.onClick()
   assert.ok(app.requests.some(r => r.op === 'session.compress' && r.session_id === 's1'))
   assert.ok(!app.requests.some(r => r.op === 'session.usage'), 'session.usage is not available to desktop plugins')
+})
+
+test('after Compress now the context bar slides to 0, then reads the new count', async (t) => {
+  const app = fixture({ configured: false, usage: [] }, { id: 's1', busy: false,
+    usage: { context_used: 342000, context_max: 1000000, context_percent: 34, compressions: 0 } })
+  t.after(app.dispose)
+  app.results.compression = { data: { enabled: true, threshold: 0.5 }, refetch() {} }
+  let pane = app.renderQuota('quota-pane')
+  await app.nodes(pane, n => n.type === 'button' && app.text(n) === 'Compress now')[0].props.onClick()
+  pane = app.renderQuota('quota-pane')
+  const bar = app.nodes(pane, n => n.props?.role === 'progressbar')[0]
+  assert.equal(bar.props['aria-valuenow'], 0)
+  assert.match(bar.children[0].props.style.transition, /width \d+ms/)
+  assert.match(app.text(pane), /0 \/ 1M tokens · reading again/)
+  assert.doesNotMatch(app.text(pane), /timed out/)
+})
+
+test('a compress that outlasts the request timeout keeps saying it is compressing', async (t) => {
+  const app = fixture({ configured: false, usage: [] }, { id: 's1', busy: false,
+    usage: { context_used: 342000, context_max: 1000000, context_percent: 34, compressions: 0 },
+    fail: { 'session.compress': 'request timed out after 30s: session.mutate' } })
+  t.after(app.dispose)
+  app.results.compression = { data: { enabled: true, threshold: 0.5 }, refetch() {} }
+  let pane = app.renderQuota('quota-pane')
+  await app.nodes(pane, n => n.type === 'button' && app.text(n) === 'Compress now')[0].props.onClick()
+  pane = app.renderQuota('quota-pane')
+  assert.match(app.text(pane), /Still compressing/)
+  assert.doesNotMatch(app.text(pane), /timed out/)
+  assert.equal(app.nodes(pane, n => n.type === 'button' && /Compressing/.test(app.text(n))).length, 1)
 })
 
 test('context card says so when Hermes has not reported a window, and disables Compress while busy', (t) => {
