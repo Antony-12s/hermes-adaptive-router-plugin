@@ -6,6 +6,7 @@ import math
 import os
 import secrets
 import shutil
+import subprocess
 import sqlite3
 import sys
 import threading
@@ -38,6 +39,7 @@ pool_state = _sibling("pool_state")
 timer = _sibling("harp_timer")
 typesafe = _sibling("typesafe")
 anthropic_plan = _sibling("anthropic_plan")
+compression = _sibling("compression")
 router_engine = _sibling("router_engine")
 delegation = _sibling("delegation")
 
@@ -636,6 +638,43 @@ def save_delegation(body: dict):
         raise HTTPException(400, str(error)) from error
     delegation.write(_home(), "harp-delegation.json", settings)
     return {"settings": settings}
+
+
+def _hermes_cli(args, timeout=30):
+    launcher = shutil.which("hermes")
+    command = [launcher, *args] if launcher else [sys.executable, "-m", "hermes_cli.main", *args]
+    return subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=_hermes_env(), stdin=subprocess.DEVNULL)
+
+
+@router.get("/compression")
+def get_compression():
+    """Auto-compress setting, read through `hermes config get` (the same resolver Hermes uses)."""
+    values = {}
+    for key in ("compression.enabled", "compression.threshold"):
+        try:
+            result = _hermes_cli(["config", "get", key], timeout=15)
+            values[key] = result.stdout.strip() if result.returncode == 0 else ""
+        except (OSError, subprocess.TimeoutExpired):
+            values[key] = ""
+    enabled = values["compression.enabled"].lower() != "false"
+    try:
+        threshold = float(values["compression.threshold"])
+    except ValueError:
+        threshold = None
+    return compression.parse_settings({"compression": {"enabled": enabled, "threshold": threshold}})
+
+
+@router.post("/compression")
+def set_compression(body: dict):
+    try:
+        writes = compression.settings_change(body)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    for key, value in writes:
+        result = _hermes_cli(["config", "set", key, value])
+        if result.returncode:
+            raise HTTPException(500, "Could not save auto-compress: " + (result.stderr or result.stdout).strip()[:200])
+    return get_compression()
 
 
 @router.post("/router/settings")

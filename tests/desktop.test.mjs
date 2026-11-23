@@ -90,7 +90,7 @@ test('the focused chat can ignore, toggle and explicitly apply its quota route',
   app.quotaEvent({ session_id: 'other', quota })
   assert.equal(app.renderQuota('quota-notice'), null)
   app.quotaEvent({ session_id: 'chat', quota })
-  assert.match(app.text(app.renderQuota('quota-pane')), /Context.*Active chat.*Working.*93% used/)
+  assert.match(app.text(app.renderQuota('quota-pane')), /Context.*Not reported yet.*93% used/)
   session.id = 'other'
   assert.doesNotMatch(app.text(app.renderQuota('quota-pane')), /93% used/)
   session.id = 'chat'
@@ -129,6 +129,49 @@ test('Delegation saves a manual work route and Diagram shows the Hermes result',
   assert.equal(request.body.jobs[0].effort, 'high')
   button(app, app.render(), 'Diagram').props.onClick()
   assert.match(app.text(app.render()), /LATEST HERMES DELEGATION.*Review PR.*Manual/)
+})
+
+test('context card shows tokens, percent, the auto-compress mark and Compress now', (t) => {
+  const app = fixture({ configured: false, usage: [] }, { id: 's1', busy: false })
+  t.after(app.dispose)
+  app.results.context = { data: { context_used: 124000, context_max: 200000, context_percent: 62, compressions: 2 }, refetch() {} }
+  app.results.compression = { data: { enabled: true, threshold: 0.75, presets: [0.5, 0.6, 0.75, 0.85] }, refetch() {} }
+  const pane = app.renderQuota('quota-pane')
+  const text = app.text(pane)
+  assert.match(text, /124K \/ 200K tokens · 62%/)
+  assert.match(text, /Auto-compresses at 75%/)
+  assert.match(text, /compressed 2×/)
+  const bar = app.nodes(pane, n => n.props?.role === 'progressbar')
+  assert.equal(bar.length, 1)
+  assert.equal(bar[0].props['aria-valuenow'], 62)
+  const compress = app.nodes(pane, n => n.type === 'button' && app.text(n) === 'Compress now')
+  assert.equal(compress.length, 1)
+  assert.equal(compress[0].props.disabled, false)
+  compress[0].props.onClick()
+  assert.ok(app.requests.some(r => r.op === 'session.compress' && r.session_id === 's1'))
+})
+
+test('context card says so when Hermes has not reported a window, and disables Compress while busy', (t) => {
+  const app = fixture({ configured: false, usage: [] }, { id: 's1', busy: true })
+  t.after(app.dispose)
+  app.results.context = { data: { context_used: 0 }, refetch() {} }
+  app.results.compression = { data: { enabled: false }, refetch() {} }
+  const pane = app.renderQuota('quota-pane')
+  assert.match(app.text(pane), /Not reported yet/)
+  assert.match(app.text(pane), /Auto-compress off/)
+  const compress = app.nodes(pane, n => n.type === 'button' && app.text(n) === 'Compress now')
+  assert.equal(compress[0].props.disabled, true)
+})
+
+test('settings offer the auto-compress presets and Off', (t) => {
+  const app = fixture({ configured: false, usage: [] })
+  t.after(app.dispose)
+  app.results.compression = { data: { enabled: true, threshold: 0.75 }, refetch() {} }
+  app.results.router = { data: routerData(), refetch() {} }
+  app.slots[0] = 'settings'
+  const text = app.text(app.render())
+  assert.match(text, /Auto-compress context at/)
+  assert.match(text, /50%.*60%.*75%.*85%.*Off/)
 })
 
 test('Quota pane shows two independent limits per account with bar and ring views', () => {
@@ -174,7 +217,7 @@ test('Quota pane shows two independent limits per account with bar and ring view
   button(app, app.render(), 'Settings').props.onClick()
   const settings = app.render()
   assert.match(app.text(settings), /Provider weights.*Delegation.*Diagram.*Copy into a new Hermes chat/)
-  const style = app.nodes(settings, node => node.type === 'select')[0]
+  const style = app.nodes(settings, node => node.type === 'select' && node.props.value === 'bar')[0]
   style.props.onChange({ target: { value: 'ring' } })
   const rings = app.nodes(app.renderQuota('quota-pane'), node => node.props?.role === 'meter')
   assert.deepEqual(rings.map(node => node.props['aria-valuenow']), [9, 22, 76, 0, 42])

@@ -108,6 +108,47 @@ function refreshQuotaReadings() {
   }
 }
 
+const tokenCount = count => count >= 1e6 ? `${(count / 1e6).toFixed(1).replace(/\.0$/, '')}M` : count >= 1e3 ? `${Math.round(count / 1e3)}K` : String(count)
+
+function ContextCard({ session, working }) {
+  const [compressing, setCompressing] = useState(false)
+  const [note, setNote] = useState('')
+  const usage = useQuery({ queryKey: [ID, 'context', session], enabled: !!session, refetchInterval: 5000,
+    queryFn: () => host.request('session.usage', { session_id: session }) })
+  const settings = useQuery({ queryKey: [ID, 'compression'], queryFn: () => rest('/compression'), refetchInterval: 60000 })
+  if (!session) return h('div', null, h('strong', null, 'Context'), h('div', { className: 'harp-muted' }, 'Open a chat to see its context.'))
+  const used = usage.data?.context_used
+  const maximum = usage.data?.context_max
+  const known = Number.isFinite(used) && Number.isFinite(maximum) && maximum > 0
+  const percent = known ? Math.min(100, Math.max(0, Math.round(Number.isFinite(usage.data?.context_percent) ? usage.data.context_percent : used / maximum * 100))) : 0
+  const threshold = settings.data?.enabled === false ? null : settings.data?.threshold
+  const compressions = usage.data?.compressions || 0
+  const compressNow = async () => {
+    setCompressing(true)
+    setNote('')
+    try {
+      const result = await host.request('session.compress', { session_id: session })
+      setNote(result?.message || (result?.compressed === false ? 'Nothing to compress yet.' : 'Compressed.'))
+    } catch (error) {
+      setNote(failure(error))
+    } finally {
+      setCompressing(false)
+      usage.refetch()
+    }
+  }
+  return h('div', null,
+    h('strong', null, 'Context'),
+    h('div', { className: 'harp-live-line' },
+      h('b', null, known ? `${tokenCount(used)} / ${tokenCount(maximum)} tokens · ${percent}%` : 'Not reported yet'),
+      h(Button, { size: 'sm', disabled: !known || working || compressing, onClick: compressNow }, compressing ? 'Compressing…' : 'Compress now')),
+    known && h('div', { className: 'harp-bar', style: { width: '100%', position: 'relative' }, role: 'progressbar', 'aria-valuenow': percent, 'aria-valuemin': 0, 'aria-valuemax': 100 },
+      h('i', { style: { width: `${percent}%` } }),
+      threshold && h('b', { style: { position: 'absolute', top: -3, bottom: -3, width: 2, left: `${threshold * 100}%`, background: 'var(--ui-orange)' } })),
+    h('small', { className: 'harp-muted' }, threshold ? `Auto-compresses at ${Math.round(threshold * 100)}%` : 'Auto-compress off',
+      compressions ? ` · compressed ${compressions}×` : '', working ? ' · waiting for the reply' : ''),
+    note && h('small', { className: 'harp-muted', role: 'status' }, ` ${note}`))
+}
+
 function QuotaNotice({ monitor = false, settingsOnly = false, defaultAuto = false } = {}) {
   const [, update] = useState(0)
   useEffect(() => {
@@ -131,8 +172,7 @@ function QuotaNotice({ monitor = false, settingsOnly = false, defaultAuto = fals
     } }, auto ? 'Auto-switch on' : 'Auto-switch off')
   if (settingsOnly) return autoSwitch
   const working = !!host.state?.busyBySession?.get?.()?.[focusedChat()]
-  const context = monitor && h('div', null, h('strong', null, 'Context'),
-    h('div', { className: 'harp-muted' }, session ? (working ? 'Active chat · Working' : 'Active chat · Idle') : 'Open a chat to see its context.'))
+  const context = monitor && h(ContextCard, { session, working })
   if (!notice || notice.ignored) return monitor
     ? h('section', { className: 'harp-card', 'aria-label': 'Chat context' }, context,
       notice?.ignored && h('div', { className: 'harp-muted' }, 'Quota warning dismissed for this chat.')) : null
@@ -220,12 +260,37 @@ function LiveRouting() {
     })))
 }
 
+function CompressSetting() {
+  const query = useQuery({ queryKey: [ID, 'compression'], queryFn: () => rest('/compression') })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const current = query.data?.enabled === false ? 'off' : String(query.data?.threshold ?? 0.5)
+  const save = async value => {
+    setSaving(true)
+    setError('')
+    try {
+      await rest('/compression', { method: 'POST', body: value === 'off' ? { enabled: false } : { threshold: Number(value) } })
+      query.refetch()
+    } catch (failed) {
+      setError(failure(failed))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return h('label', { className: 'harp-field' }, 'Auto-compress context at ',
+    h('select', { value: current, disabled: saving || !query.data, onChange: e => save(e.target.value) },
+      ...[['0.5', '50%'], ['0.6', '60%'], ['0.75', '75%'], ['0.85', '85%'], ['off', 'Off']].map(([value, label]) => h('option', { key: value, value }, label))),
+    h('small', { className: 'harp-muted' }, ' New chats use this; open chats follow after they restart.'),
+    error && h('small', { role: 'alert' }, ` ${error}`))
+}
+
 function QuotaSettings({ onOpen, onWeights }) {
   const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
   const [meter, setMeter] = useState(quotaMeter)
   return h('div', null, h(Section, { title: 'QUOTA SETTINGS' },
     h('div', { className: 'harp-tools' },
       h(QuotaNotice, { settingsOnly: true, defaultAuto: !!query.data?.settings?.apply }),
+      h(CompressSetting),
       h('label', null, 'Quota display ', h('select', { value: meter, onChange: e => {
         quotaMeter = e.target.value
         setMeter(quotaMeter)
