@@ -664,6 +664,15 @@ def add_api_key(body: dict):
     return {"provider": body.get("provider"), **status}
 
 
+@router.post("/api-keys/key/remove")
+def remove_api_key(body: dict):
+    try:
+        status = api_keys.remove_key(str(body.get("provider", "")))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(400, str(error)) from error
+    return {"provider": body.get("provider"), **status}
+
+
 @router.post("/api-keys")
 def save_api_keys(body: dict):
     try:

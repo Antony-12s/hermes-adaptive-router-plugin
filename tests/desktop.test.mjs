@@ -42,6 +42,7 @@ function fixture(usage, session = {}) {
         focusedUsage: { get: () => session.usage ?? null, listen: () => () => {} },
       } : undefined },
     sdk: { COMPOSER_AREAS: { underside: 'composer.underside' } },
+    window: { confirm: () => globalThis.__confirmAnswer ?? true },
     setTimeout, clearTimeout, setInterval, clearInterval,
     PALETTE_AREA: 'palette', ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar',
     Button: ({ children, ...props }) => ({ type: 'button', props, children }),
@@ -833,4 +834,21 @@ test('Save key stays disabled until something is pasted', () => {
   const app = apiPage()
   const page = app.render()
   assert.equal(app.nodes(page, n => n.props?.['data-action'] === 'save-key-deepseek')[0].props.disabled, true)
+})
+
+test('Remove key appears only for a key HARP added, and asks before removing', async () => {
+  const app = apiPage()
+  app.results['api-keys'].data.providers[0].removable = true
+  const page = app.render()
+  assert.equal(app.nodes(page, n => n.props?.['data-action'] === 'remove-key-zai').length, 0)
+  const remove = app.nodes(page, n => n.props?.['data-action'] === 'remove-key-deepseek')[0]
+  assert.ok(remove, 'remove button for a HARP-added key')
+  globalThis.__confirmAnswer = false
+  try {
+    await remove.props.onClick()
+    assert.ok(!app.requests.some(r => r?.path === '/api-keys/key/remove'), 'cancel sends nothing')
+    globalThis.__confirmAnswer = true
+    await remove.props.onClick()
+    assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/api-keys/key/remove').body)), { provider: 'deepseek' })
+  } finally { delete globalThis.__confirmAnswer }
 })

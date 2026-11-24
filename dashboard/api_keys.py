@@ -107,6 +107,36 @@ def _load(provider):
     return load_pool(provider)
 
 
+HARP_LABEL = "HARP"      # keys this page added carry this label; keys set elsewhere are never removed here
+
+
+def _harp_index(pool):
+    """Index of the key this page added (manual, labelled HARP), or None."""
+    for index, entry in enumerate(pool.entries()):
+        if getattr(entry, "label", "") == HARP_LABEL and getattr(entry, "source", "") == "manual":
+            return index
+    return None
+
+
+def removable(provider, pool_loader=None):
+    try:
+        return _harp_index((pool_loader or _load)(provider)) is not None
+    except Exception:  # noqa: BLE001 - an unreadable pool simply offers no removal
+        return False
+
+
+def remove_key(provider, pool=None):
+    """Delete the key this page added to Hermes' pool. Keys set elsewhere (env, Hermes login) are left alone."""
+    if provider not in IDS:
+        raise ValueError(f"Unknown API provider: {provider}")
+    pool = pool or _load(provider)
+    index = _harp_index(pool)
+    if index is None:
+        raise ValueError("No key added from HARP for this provider. Remove keys set elsewhere in Hermes.")
+    pool.remove_index(index + 1)   # Hermes' remove_index is 1-based
+    return hermes_status(provider)
+
+
 def settings(home):
     try:
         return validate(json.loads((Path(home) / FILE).read_text(encoding="utf-8")))
@@ -216,6 +246,7 @@ def overview(home, status=hermes_status, price=hermes_price, models=hermes_model
                 spent += used / 1_000_000 * rate
         total += spent
         rows.append({"id": provider, "label": LABEL[provider], "env": ENV[provider], **status(provider),
+                     "removable": status(provider).get("configured") and removable(provider),
                      "use": row["use"], "cheap": cheap, "strong": strong, "price": row["price"],
                      "prices": {"cheap": model_price(provider, cheap, config, price),
                                 "strong": model_price(provider, strong, config, price)},

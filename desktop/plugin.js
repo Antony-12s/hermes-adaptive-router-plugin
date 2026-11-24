@@ -807,6 +807,17 @@ function ApiKeysView() {
   const [storing, setStoring] = useState('')
   const data = query.data
   if (!data) return h(QueryState, { query, label: 'API keys' })
+  const removeKey = async row => {
+    if (!window.confirm(`Remove the ${row.label} key that HARP added? Keys set elsewhere in Hermes are not touched.`)) return
+    setStoring(row.id)
+    try {
+      await post('/api-keys/key/remove', { provider: row.id })
+      notify('success', `${row.label} key removed from Hermes.`)
+      query.refetch()
+    } catch (error) {
+      notify('error', `${row.label}: ${failure(error)}`)
+    } finally { setStoring('') }
+  }
   const storeKey = async row => {
     const key = pasted[row.id] || ''
     setStoring(row.id)
@@ -872,7 +883,9 @@ function ApiKeysView() {
                 className: 'harp-key-input', value: pasted[row.id] || '', onChange: e => setPasted({ ...pasted, [row.id]: e.target.value }) }),
               h(Button, { size: 'sm', variant: 'outline', 'data-action': `save-key-${row.id}`,
                 disabled: !(pasted[row.id] || '').trim() || storing === row.id, onClick: () => storeKey(row) },
-                storing === row.id ? 'Saving…' : row.configured ? 'Replace key' : 'Save key')),
+                storing === row.id ? 'Saving…' : row.configured ? 'Replace key' : 'Save key'),
+              row.removable && h(Button, { size: 'sm', variant: 'ghost', 'data-action': `remove-key-${row.id}`,
+                disabled: storing === row.id, onClick: () => removeKey(row) }, 'Remove key')),
             h(Switch, { checked: !!value.use, disabled: !row.configured, 'aria-label': `Use ${row.label}`, onCheckedChange: use => editRow(row.id, { use }) }),
             h(Pick, { value: value.cheap, label: `Cheap model: ${row.label}`, wide: true, options: [...new Set([value.cheap, ...row.models].filter(Boolean))], onChange: cheap => editRow(row.id, { cheap }) }),
             h(Pick, { value: value.strong, label: `Strong model: ${row.label}`, wide: true, options: [...new Set([value.strong, ...row.models].filter(Boolean))], onChange: strong => editRow(row.id, { strong }) }),
