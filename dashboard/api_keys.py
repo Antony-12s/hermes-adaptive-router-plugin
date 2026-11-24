@@ -76,6 +76,37 @@ def validate(body):
     return {"enabled": body["enabled"], "daily_budget": budget, "order": order, "providers": providers}
 
 
+KEY_SHAPE = re.compile(r"\S{8,300}")
+
+
+def add_key(provider, key, pool=None, adder=None):
+    """Store a key in Hermes' credential pool for `provider`. HARP keeps no copy.
+
+    The key goes straight to Hermes' own helper in this process, so it never appears in a command line,
+    a log line or a response. Returns the same status view as hermes_status()."""
+    if provider not in IDS:
+        raise ValueError(f"Unknown API provider: {provider}")
+    key = key.strip() if isinstance(key, str) else ""
+    if not KEY_SHAPE.fullmatch(key):
+        raise ValueError("Paste the whole key: 8 to 300 characters, no spaces.")
+    if adder is None:
+        from types import SimpleNamespace
+        from hermes_cli.auth_commands import _add_api_key_credential as adder_fn
+        from contextlib import redirect_stdout
+        import io
+
+        def adder(provider_id, token):
+            with redirect_stdout(io.StringIO()):   # Hermes prints a confirmation line; keep it out of logs
+                adder_fn(SimpleNamespace(api_key=token, label="HARP"), provider_id, pool or _load(provider_id))
+    adder(provider, key)
+    return hermes_status(provider)
+
+
+def _load(provider):
+    from agent.credential_pool import load_pool
+    return load_pool(provider)
+
+
 def settings(home):
     try:
         return validate(json.loads((Path(home) / FILE).read_text(encoding="utf-8")))

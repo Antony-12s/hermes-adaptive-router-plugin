@@ -652,6 +652,18 @@ def get_api_keys():
     return api_keys.overview(_home())
 
 
+@router.post("/api-keys/key")
+def add_api_key(body: dict):
+    # The key is passed on to Hermes and never stored, logged or echoed back.
+    try:
+        status = api_keys.add_key(str(body.get("provider", "")), body.get("key"))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(400, str(error)) from error
+    except Exception:  # noqa: BLE001 - never echo Hermes' error text: it can contain the key
+        raise HTTPException(500, "Hermes could not store that key. Check the Hermes log.") from None
+    return {"provider": body.get("provider"), **status}
+
+
 @router.post("/api-keys")
 def save_api_keys(body: dict):
     try:

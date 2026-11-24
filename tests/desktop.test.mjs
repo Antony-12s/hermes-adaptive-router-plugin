@@ -768,10 +768,11 @@ test('API key tab lists DeepSeek, GLM and Qwen with key state, prices and today\
   const app = apiPage()
   const page = app.render()
   const text = app.text(page)
-  for (const part of [/API KEYS/, /DeepSeek/, /GLM \(Z\.AI\)/, /Qwen \(DashScope\)/, /Not set · DASHSCOPE_API_KEY/, /\$0\.42 · 3 req/,
+  for (const part of [/API KEYS/, /DeepSeek/, /GLM \(Z\.AI\)/, /Qwen \(DashScope\)/, /Not set/, /\$0\.42 · 3 req/,
     /unknown: enter one/, /120K tokens unpriced/, /Keys found in Hermes/, /2 \/ 3/, /\$4\.58/])
     assert.match(text, part)
   assert.equal(app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Use Qwen (DashScope)')[0].props.disabled, true)
+  assert.equal(app.nodes(page, n => n.props?.['aria-label'] === 'Key: Qwen (DashScope)')[0].props.placeholder, 'Paste DASHSCOPE_API_KEY')
   assert.equal(app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Use DeepSeek')[0].props.disabled, false)
 })
 
@@ -810,4 +811,26 @@ test('Delegation offers API providers that have a key', () => {
   const pick = app.nodes(page, n => n.type === 'select' && n.props['aria-label'] === 'Work provider 1')[0]
   assert.deepEqual(app.nodes(pick, n => n.type === 'option').map(n => n.props.value), ['deepseek', 'anthropic', 'openai-codex'])
   assert.match(app.text(pick), /DeepSeek/)
+})
+
+test('a pasted key is a password field, goes to Hermes once, and is cleared from the page', async () => {
+  const app = apiPage()
+  let page = app.render()
+  const input = app.nodes(page, n => n.type === 'input' && n.props['aria-label'] === 'Key: Qwen (DashScope)')[0]
+  assert.equal(input.props.type, 'password')
+  assert.equal(input.props.autoComplete, 'off')
+  input.props.onChange({ target: { value: 'sk-fake-test-key-000' } })
+  page = app.render()
+  await app.nodes(page, n => n.props?.['data-action'] === 'save-key-alibaba')[0].props.onClick()
+  const sent = app.requests.find(r => r?.path === '/api-keys/key' && r.method === 'POST')
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.body)), { provider: 'alibaba', key: 'sk-fake-test-key-000' })
+  page = app.render()
+  assert.equal(app.nodes(page, n => n.type === 'input' && n.props['aria-label'] === 'Key: Qwen (DashScope)')[0].props.value, '')
+  assert.doesNotMatch(JSON.stringify(app.requests.filter(r => r?.path !== '/api-keys/key')), /sk-fake-test-key/)
+})
+
+test('Save key stays disabled until something is pasted', () => {
+  const app = apiPage()
+  const page = app.render()
+  assert.equal(app.nodes(page, n => n.props?.['data-action'] === 'save-key-deepseek')[0].props.disabled, true)
 })

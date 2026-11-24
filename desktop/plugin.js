@@ -526,6 +526,8 @@ const CSS = `
 .harp-toolbar label{display:inline-flex;align-items:center;gap:6px;color:var(--ui-text-secondary)}
 .harp-toolbar-item{display:inline-flex;align-items:center;gap:8px}
 .harp-input-narrow{width:84px}
+.harp-key-cell{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px}
+.harp-key-input{width:180px}
 .harp-price{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .harp-jobs{display:grid;gap:0;margin:6px 0 10px}
 .harp-job{display:grid;grid-template-columns:minmax(110px,1fr) minmax(160px,2fr) 130px 150px 92px auto;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
@@ -801,8 +803,22 @@ function ApiKeysView() {
   const query = useQuery({ queryKey: [ID, 'api-keys'], queryFn: () => rest('/api-keys'), refetchInterval: 30000 })
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [pasted, setPasted] = useState({})     // typed keys, held only until they are sent to Hermes
+  const [storing, setStoring] = useState('')
   const data = query.data
   if (!data) return h(QueryState, { query, label: 'API keys' })
+  const storeKey = async row => {
+    const key = pasted[row.id] || ''
+    setStoring(row.id)
+    try {
+      await post('/api-keys/key', { provider: row.id, key })
+      setPasted({ ...pasted, [row.id]: '' })
+      notify('success', `${row.label} key saved in Hermes.`)
+      query.refetch()
+    } catch (error) {
+      notify('error', `${row.label}: ${failure(error)}`)
+    } finally { setStoring('') }
+  }
   const s = draft || data.settings
   const rows = s.order.map(id => data.providers.find(row => row.id === id)).filter(Boolean)
   const setting = id => {
@@ -850,8 +866,13 @@ function ApiKeysView() {
               h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Move up ${row.label}`, disabled: !index, onClick: () => move(index, -1) }, h(Codicon, { name: 'arrow-up', size: '0.8rem' })),
               h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Move down ${row.label}`, disabled: index === rows.length - 1, onClick: () => move(index, 1) }, h(Codicon, { name: 'arrow-down', size: '0.8rem' }))),
             h('b', null, row.label),
-            row.configured ? h('span', null, 'Set', row.key_source ? h('span', { className: 'harp-muted' }, ` · ${row.key_source}`) : null)
-              : h('span', { className: 'harp-muted' }, `Not set · ${row.env}`),
+            h('span', { className: 'harp-key-cell' },
+              h('span', null, row.configured ? 'Set' : 'Not set', row.key_source ? h('span', { className: 'harp-muted' }, ` · ${row.key_source}`) : null),
+              h(Input, { type: 'password', autoComplete: 'off', spellCheck: false, placeholder: `Paste ${row.env}`, 'aria-label': `Key: ${row.label}`,
+                className: 'harp-key-input', value: pasted[row.id] || '', onChange: e => setPasted({ ...pasted, [row.id]: e.target.value }) }),
+              h(Button, { size: 'sm', variant: 'outline', 'data-action': `save-key-${row.id}`,
+                disabled: !(pasted[row.id] || '').trim() || storing === row.id, onClick: () => storeKey(row) },
+                storing === row.id ? 'Saving…' : row.configured ? 'Replace key' : 'Save key')),
             h(Switch, { checked: !!value.use, disabled: !row.configured, 'aria-label': `Use ${row.label}`, onCheckedChange: use => editRow(row.id, { use }) }),
             h(Pick, { value: value.cheap, label: `Cheap model: ${row.label}`, wide: true, options: [...new Set([value.cheap, ...row.models].filter(Boolean))], onChange: cheap => editRow(row.id, { cheap }) }),
             h(Pick, { value: value.strong, label: `Strong model: ${row.label}`, wide: true, options: [...new Set([value.strong, ...row.models].filter(Boolean))], onChange: strong => editRow(row.id, { strong }) }),
@@ -863,7 +884,7 @@ function ApiKeysView() {
               row.unpriced_tokens ? h('span', { className: 'harp-muted' }, ` · ${compact.format(row.unpriced_tokens)} tokens unpriced`) : null)] }
         }) }),
       h('p', { className: 'harp-muted' },
-        'Keys stay in Hermes: add one in Hermes settings or set the variable shown above, then restart Hermes. ',
+        'Keys are sent straight to Hermes and stored in its credential pool; HARP keeps no copy and never shows one again. ',
         'The first provider in this order that is switched on, has a key and a known price runs the work, until the daily budget is spent. ',
         'Delegation can also send a saved work type to any provider with a key.')))
 }
