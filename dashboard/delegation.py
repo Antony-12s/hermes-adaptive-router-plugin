@@ -111,6 +111,22 @@ def select(goal, config, engine):
     return match, "local" if match else "hermes"
 
 
+def ladder_route(goal, engine):
+    """{provider, model, reasoning_effort} from the router's cost ladder, or None to keep Hermes' default."""
+    if not goal.strip():
+        return None
+    try:
+        if not engine.settings().get("ladder"):
+            return None
+        decision = engine.decide(goal, log=False, use_jev=False)
+    except Exception:  # noqa: BLE001 - routing a subagent must never refuse the task
+        return None
+    if not decision or ":" not in decision.get("pick", ""):
+        return None
+    provider, model = decision["pick"].split(":", 1)
+    return {"provider": provider, "model": model, "reasoning_effort": decision["effort"]}
+
+
 def api_fallback(route, source, engine, fallback=None):
     """A saved route on a subscription pool that is near its limit moves to an API key, when one is allowed."""
     if route["provider"] not in SUBSCRIPTIONS:
@@ -156,12 +172,17 @@ def backend(engine_factory):
                 source = "manual"
             else:
                 job, source = select(str(task.get("goal") or ""), rules, engine)
-            if not job:
-                return default
-            route = {"provider": job["provider"], "model": job["model"], "reasoning_effort": job["effort"]}
+            if job:
+                route = {"provider": job["provider"], "model": job["model"], "reasoning_effort": job["effort"]}
+                name = job["name"]
+            else:   # no saved work type: the same cost ladder as the main chat (heavyweight, quota, tier)
+                route = ladder_route(str(task.get("goal") or ""), engine)
+                if not route:
+                    return default
+                source, name = "ladder", "Cost ladder"
             route, source = api_fallback(route, source, engine)
             try:
-                write(engine.home, "harp-delegation-latest.json", {**route, "job": job["name"], "source": source})
+                write(engine.home, "harp-delegation-latest.json", {**route, "job": name, "source": source})
             except OSError:
                 pass
             return route

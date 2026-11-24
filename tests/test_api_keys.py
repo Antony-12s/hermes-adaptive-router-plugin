@@ -6,6 +6,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from dashboard import api_keys, delegation, router
 
@@ -130,6 +131,43 @@ class DelegationFallbackTests(unittest.TestCase):
         route = {"provider": "deepseek", "model": "deepseek-flash", "reasoning_effort": "low"}
         self.assertEqual(delegation.api_fallback(route, "manual", self.engine(True), lambda h, t: 1/0), (route, "manual"))
 
+
+
+class LadderDelegationTests(unittest.TestCase):
+    def engine(self, pick="anthropic:claude-opus-5-5", effort="medium", ladder=True):
+        decisions = []
+
+        def decide(goal, log=True, use_jev=True):
+            decisions.append((goal, log, use_jev))
+            return {"pick": pick, "effort": effort}
+        engine = SimpleNamespace(home="h", settings=lambda: {"ladder": ladder}, decide=decide,
+                                 loads=lambda s: {"anthropic": {"pool_near_limit": False}})
+        return engine, decisions
+
+    def test_a_task_with_no_saved_work_uses_the_ladder_pick(self):
+        engine, decisions = self.engine()
+        self.assertEqual(delegation.ladder_route("refactor the parser", engine),
+                         {"provider": "anthropic", "model": "claude-opus-5-5", "reasoning_effort": "medium"})
+        self.assertEqual(decisions, [("refactor the parser", False, False)])   # not logged as a chat turn, no Jev call
+
+    def test_ladder_off_empty_goal_or_a_failure_keeps_hermes_default(self):
+        self.assertIsNone(delegation.ladder_route("x", self.engine(ladder=False)[0]))
+        self.assertIsNone(delegation.ladder_route("   ", self.engine()[0]))
+        broken = SimpleNamespace(settings=lambda: {"ladder": True}, decide=lambda *a, **k: 1 / 0)
+        self.assertIsNone(delegation.ladder_route("x", broken))
+
+    def test_backend_routes_an_unsaved_task_through_the_ladder(self):
+        engine, _ = self.engine()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        engine.home = tmp.name
+        fake = SimpleNamespace(DelegationProvider=object, ROUTE_KEYS=frozenset({"model", "provider", "reasoning_effort"}))
+        with patch.dict("sys.modules", {"agent.delegation_provider": fake}):
+            backend = delegation.backend(lambda: engine)
+        route = backend.route_task({"goal": "fix the failing build"}, {"model": "gpt-6-sol", "provider": "openai-codex"})
+        self.assertEqual(route, {"provider": "anthropic", "model": "claude-opus-5-5", "reasoning_effort": "medium"})
+        latest = json.loads((Path(tmp.name) / "harp-delegation-latest.json").read_text(encoding="utf-8"))
+        self.assertEqual((latest["job"], latest["source"]), ("Cost ladder", "ladder"))
 
 if __name__ == "__main__":
     unittest.main()
