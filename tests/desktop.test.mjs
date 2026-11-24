@@ -491,7 +491,7 @@ test('top row picks Diagram or a provider; the second row holds the five views',
   const app = fixture({ configured: false, usage: [] })
   const page = app.render()
   const groups = JSON.parse(JSON.stringify(app.nodes(page, n => n.props?.role === 'group').map(g => g.children.map(b => b.children[0]))))
-  assert.deepEqual(groups[0], ['Summary', 'Diagram', 'Delegation', 'Type-safe', 'anthropic', 'Codex', 'Settings'])
+  assert.deepEqual(groups[0], ['Summary', 'Diagram', 'Delegation', 'Type-safe', 'anthropic', 'Codex', 'API key', 'Settings'])
   assert.deepEqual(groups[1], ['Accounts & usage', 'Activity', 'Report', 'Health', 'Alerts'])
   app.results.router = { data: routerData(), refetch() {} }
   tab(app, 'Diagram').props.onClick()
@@ -747,4 +747,67 @@ test('delegation lists saved work as rows and says so when there is none', () =>
   app.results.delegation.data.settings.jobs = [{ name: 'Review PR', description: 'Review', provider: 'anthropic', model: 'opus', effort: 'medium' }]
   assert.equal(app.nodes(app.render(), n => n.props?.className === 'harp-job').length, 1)
   assert.doesNotMatch(app.text(app.render()), /No saved work yet/)
+})
+
+function apiPage() {
+  const app = fixture({ configured: false, usage: [] })
+  const row = (id, label, env, configured, extra = {}) => ({ id, label, env, configured, key_source: configured ? env : '', use: false,
+    cheap: `${id}-small`, strong: `${id}-big`, price: null, prices: { cheap: 0.25, strong: 1 }, models: [`${id}-big`, `${id}-small`],
+    spent_today: 0, tokens_today: 0, requests_today: 0, unpriced_tokens: 0, ...extra })
+  app.results['api-keys'] = { data: {
+    settings: { enabled: false, daily_budget: 5, order: ['deepseek', 'zai', 'alibaba'], providers: {} },
+    providers: [row('deepseek', 'DeepSeek', 'DEEPSEEK_API_KEY', true, { spent_today: 0.42, requests_today: 3 }),
+      row('zai', 'GLM (Z.AI)', 'GLM_API_KEY', true, { prices: { cheap: null, strong: null }, unpriced_tokens: 120000, requests_today: 1 }),
+      row('alibaba', 'Qwen (DashScope)', 'DASHSCOPE_API_KEY', false)],
+    spent_today: 0.42, budget_left: 4.58 }, refetch() {} }
+  app.slots[0] = 'api'
+  return app
+}
+
+test('API key tab lists DeepSeek, GLM and Qwen with key state, prices and today\'s spend', () => {
+  const app = apiPage()
+  const page = app.render()
+  const text = app.text(page)
+  for (const part of [/API KEYS/, /DeepSeek/, /GLM \(Z\.AI\)/, /Qwen \(DashScope\)/, /Not set · DASHSCOPE_API_KEY/, /\$0\.42 · 3 req/,
+    /unknown: enter one/, /120K tokens unpriced/, /Keys found in Hermes/, /2 \/ 3/, /\$4\.58/])
+    assert.match(text, part)
+  assert.equal(app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Use Qwen (DashScope)')[0].props.disabled, true)
+  assert.equal(app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Use DeepSeek')[0].props.disabled, false)
+})
+
+test('API key settings are saved together: switch, budget, order, models and a price', async () => {
+  const app = apiPage()
+  let page = app.render()
+  app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Use API keys')[0].props.onCheckedChange(true)
+  page = app.render()
+  app.nodes(page, n => n.type === 'input' && n.props['aria-label'] === 'Daily budget')[0].props.onChange({ target: { value: '12' } })
+  page = app.render()
+  app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Use DeepSeek')[0].props.onCheckedChange(true)
+  page = app.render()
+  app.nodes(page, n => n.type === 'input' && n.props['aria-label'] === 'Price: GLM (Z.AI)')[0].props.onChange({ target: { value: '1.2' } })
+  page = app.render()
+  app.nodes(page, n => n.type === 'button' && n.props['aria-label'] === 'Move up GLM (Z.AI)')[0].props.onClick()
+  page = app.render()
+  await app.nodes(page, n => n.props?.['data-action'] === 'save-api-keys')[0].props.onClick()
+  const body = JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/api-keys' && r.method === 'POST').body))
+  assert.equal(body.enabled, true)
+  assert.equal(body.daily_budget, 12)
+  assert.deepEqual(body.order, ['zai', 'deepseek', 'alibaba'])
+  assert.equal(body.providers.deepseek.use, true)
+  assert.equal(body.providers.deepseek.strong, 'deepseek-big')
+  assert.equal(body.providers.zai.price, 1.2)
+  assert.equal(body.providers.alibaba.use, false)
+})
+
+test('Delegation offers API providers that have a key', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.delegation = { data: { settings: { classifier: 'local', jobs: [{ name: 'Batch', description: '', provider: 'deepseek', model: 'deepseek-flash', effort: 'low' }] },
+    models: { anthropic: ['opus'], 'openai-codex': ['sol'], deepseek: ['deepseek-flash'] },
+    labels: { anthropic: 'anthropic', 'openai-codex': 'openai-codex', deepseek: 'DeepSeek' }, latest: null }, refetch() {} }
+  app.results.router = { data: routerData(), refetch() {} }
+  app.slots[0] = 'delegation'
+  const page = app.render()
+  const pick = app.nodes(page, n => n.type === 'select' && n.props['aria-label'] === 'Work provider 1')[0]
+  assert.deepEqual(app.nodes(pick, n => n.type === 'option').map(n => n.props.value), ['deepseek', 'anthropic', 'openai-codex'])
+  assert.match(app.text(pick), /DeepSeek/)
 })

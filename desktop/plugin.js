@@ -525,6 +525,8 @@ const CSS = `
 .harp-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;margin:8px 0 10px;font-size:.75rem}
 .harp-toolbar label{display:inline-flex;align-items:center;gap:6px;color:var(--ui-text-secondary)}
 .harp-toolbar-item{display:inline-flex;align-items:center;gap:8px}
+.harp-input-narrow{width:84px}
+.harp-price{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .harp-jobs{display:grid;gap:0;margin:6px 0 10px}
 .harp-job{display:grid;grid-template-columns:minmax(110px,1fr) minmax(160px,2fr) 130px 150px 92px auto;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
 @media(max-width:850px){.harp-job{grid-template-columns:1fr 1fr}}
@@ -794,6 +796,78 @@ function RoutingPanel({ showWeights, onWeightsShown }) {
     data.ladder && h(LadderView, { ladder: data.ladder, mode: s.mode }))
 }
 
+function ApiKeysView() {
+  // Pay-per-token providers. Keys stay in Hermes; HARP only sees whether one is set.
+  const query = useQuery({ queryKey: [ID, 'api-keys'], queryFn: () => rest('/api-keys'), refetchInterval: 30000 })
+  const [draft, setDraft] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const data = query.data
+  if (!data) return h(QueryState, { query, label: 'API keys' })
+  const s = draft || data.settings
+  const rows = s.order.map(id => data.providers.find(row => row.id === id)).filter(Boolean)
+  const setting = id => {
+    const row = data.providers.find(item => item.id === id)
+    return { use: row.use, cheap: row.cheap, strong: row.strong, price: row.price, ...(s.providers[id] || {}) }
+  }
+  const edit = changes => setDraft({ ...s, ...changes })
+  const editRow = (id, changes) => edit({ providers: { ...s.providers, [id]: { ...setting(id), ...changes } } })
+  const move = (index, step) => { const order = [...s.order]; [order[index], order[index + step]] = [order[index + step], order[index]]; edit({ order }) }
+  const save = async () => {
+    setSaving(true)
+    const providers = Object.fromEntries(data.providers.map(row => [row.id, setting(row.id)]))
+    try { await post('/api-keys', { ...s, providers }); setDraft(null); notify('success', 'API keys saved.'); query.refetch() }
+    catch (error) { notify('error', `Save API keys: ${failure(error)}`) }
+    finally { setSaving(false) }
+  }
+  const found = data.providers.filter(row => row.configured).length
+  const money = value => `$${usd.format(value || 0)}`
+  const known = row => {
+    const { cheap, strong } = row.prices
+    if (setting(row.id).price != null) return 'your price'
+    return cheap == null && strong == null ? 'unknown: enter one' : `Hermes: ${cheap == null ? '?' : money(cheap)} / ${strong == null ? '?' : money(strong)}`
+  }
+  return h('div', null,
+    h(Section, { title: 'API KEYS' },
+      h('div', { className: 'harp-toolbar' },
+        h('label', null, h(Switch, { checked: s.enabled, 'aria-label': 'Use API keys', onCheckedChange: value => edit({ enabled: value }) }),
+          'Use API keys when every subscription is near its limit'),
+        h('label', null, 'Daily budget (USD)',
+          h(Input, { type: 'number', min: 0, max: 1000, step: 1, value: String(s.daily_budget), 'aria-label': 'Daily budget',
+            className: 'harp-input-narrow', onChange: e => edit({ daily_budget: Number(e.target.value) }) })),
+        h('span', { className: 'harp-grow' }),
+        draft && h('span', { className: 'harp-muted' }, 'Unsaved changes'),
+        h(Button, { size: 'sm', variant: 'default', 'data-action': 'save-api-keys', disabled: !draft || saving, onClick: save },
+          saving ? 'Saving…' : 'Save API keys')),
+      h('div', { className: 'harp-cards' },
+        h(SummaryCard, { title: 'Spent today', value: money(data.spent_today), detail: `estimate · budget ${money(s.daily_budget)}` }),
+        h(SummaryCard, { title: 'Budget left today', value: money(data.budget_left), detail: s.enabled ? 'fallback on' : 'fallback off' }),
+        h(SummaryCard, { title: 'Keys found in Hermes', value: `${found} / ${data.providers.length}`, detail: 'only whether a key is set' })),
+      h(Table, { label: 'API providers', headings: ['Order', 'Provider', 'Key', 'Use', 'Cheap model · tiers 0-2', 'Strong model · tier 3+', '$ per 1M tokens', 'Today'],
+        rows: rows.map((row, index) => {
+          const value = setting(row.id)
+          return { key: row.id, cells: [
+            h('span', { className: 'harp-row-actions' },
+              h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Move up ${row.label}`, disabled: !index, onClick: () => move(index, -1) }, h(Codicon, { name: 'arrow-up', size: '0.8rem' })),
+              h(Button, { size: 'sm', variant: 'ghost', 'aria-label': `Move down ${row.label}`, disabled: index === rows.length - 1, onClick: () => move(index, 1) }, h(Codicon, { name: 'arrow-down', size: '0.8rem' }))),
+            h('b', null, row.label),
+            row.configured ? h('span', null, 'Set', row.key_source ? h('span', { className: 'harp-muted' }, ` · ${row.key_source}`) : null)
+              : h('span', { className: 'harp-muted' }, `Not set · ${row.env}`),
+            h(Switch, { checked: !!value.use, disabled: !row.configured, 'aria-label': `Use ${row.label}`, onCheckedChange: use => editRow(row.id, { use }) }),
+            h(Pick, { value: value.cheap, label: `Cheap model: ${row.label}`, wide: true, options: [...new Set([value.cheap, ...row.models].filter(Boolean))], onChange: cheap => editRow(row.id, { cheap }) }),
+            h(Pick, { value: value.strong, label: `Strong model: ${row.label}`, wide: true, options: [...new Set([value.strong, ...row.models].filter(Boolean))], onChange: strong => editRow(row.id, { strong }) }),
+            h('span', { className: 'harp-price' },
+              h(Input, { type: 'number', min: 0, step: 0.01, placeholder: 'auto', value: value.price == null ? '' : String(value.price), 'aria-label': `Price: ${row.label}`,
+                className: 'harp-input-narrow', onChange: e => editRow(row.id, { price: e.target.value === '' ? null : Number(e.target.value) }) }),
+              h('span', { className: 'harp-muted' }, known(row))),
+            h('span', null, row.requests_today ? `${money(row.spent_today)} · ${number.format(row.requests_today)} req` : '–',
+              row.unpriced_tokens ? h('span', { className: 'harp-muted' }, ` · ${compact.format(row.unpriced_tokens)} tokens unpriced`) : null)] }
+        }) }),
+      h('p', { className: 'harp-muted' },
+        'Keys stay in Hermes: add one in Hermes settings or set the variable shown above, then restart Hermes. ',
+        'The first provider in this order that is switched on, has a key and a known price runs the work, until the daily budget is spent. ',
+        'Delegation can also send a saved work type to any provider with a key.')))
+}
+
 function DelegationView({ showWeights, onWeightsShown } = {}) {
   const query = useQuery({ queryKey: [ID, 'delegation'], queryFn: () => rest('/delegation'), refetchInterval: 15000 })
   const load = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 60000 })
@@ -802,7 +876,8 @@ function DelegationView({ showWeights, onWeightsShown } = {}) {
   const [status, setStatus] = useState('')
   if (!query.data) return h(QueryState, { query, label: 'delegation' })
   const settings = draft || query.data.settings
-  const providers = ['anthropic', 'openai-codex']
+  const providers = Object.keys(query.data.models || {})
+  const providerLabel = provider => query.data.labels?.[provider] || ROUTER_LABEL[provider] || provider
   const models = provider => query.data.models[provider] || []
   const changeJob = (index, fields) => setDraft({ ...settings, jobs: settings.jobs.map((job, i) => i === index ? { ...job, ...fields } : job) })
   const addWork = () => setDraft({ ...settings, jobs: [...settings.jobs,
@@ -826,7 +901,7 @@ function DelegationView({ showWeights, onWeightsShown } = {}) {
   const jobRow = (job, i) => h('div', { key: i, className: 'harp-job' },
     h(Input, { 'aria-label': `Work name ${i + 1}`, placeholder: 'Work name', value: job.name, maxLength: 70, onChange: e => changeJob(i, { name: e.target.value }) }),
     h(Input, { 'aria-label': `Work description ${i + 1}`, placeholder: 'When this route should be used', value: job.description, maxLength: 300, onChange: e => changeJob(i, { description: e.target.value }) }),
-    h(Pick, { label: `Work provider ${i + 1}`, value: job.provider, options: providers, onChange: provider => changeJob(i, { provider, model: models(provider)[0] || '' }) }),
+    h(Pick, { label: `Work provider ${i + 1}`, value: job.provider, options: [...new Set([job.provider, ...providers])].map(p => ({ value: p, label: providerLabel(p) })), onChange: provider => changeJob(i, { provider, model: models(provider)[0] || '' }) }),
     h(Pick, { label: `Work agent ${i + 1}`, value: job.model, options: [...new Set([job.model, ...models(job.provider)])], onChange: model => changeJob(i, { model }) }),
     h(Pick, { label: `Work effort ${i + 1}`, value: job.effort, options: ['low', 'medium', 'high'], onChange: effort => changeJob(i, { effort }) }),
     h(Button, { size: 'sm', variant: 'ghost', onClick: () => removeWork(i) }, 'Remove work'))
@@ -1483,7 +1558,7 @@ function HarpPage() {
   const [target, setTarget] = useState(null)
   const [lastProvider, setLastProvider] = useState('anthropic')
   const [showWeights, setShowWeights] = useState(false)
-  const diagram = ['diagram', 'summary', 'delegation', 'settings'].includes(top)   // overview pages: no provider tools or views
+  const diagram = ['diagram', 'summary', 'delegation', 'api', 'settings'].includes(top)   // overview pages: no provider tools or views
   const provider = diagram ? lastProvider : top
   const pickTop = value => { setTop(value); if (ACTION_PROVIDERS.includes(value)) setLastProvider(value) }
   const accounts = useQuery({ queryKey: [ID, 'accounts', provider], queryFn: () => rest(`/accounts?provider=${encodeURIComponent(provider)}`), refetchInterval: 60000 })
@@ -1516,7 +1591,7 @@ function HarpPage() {
       h('h1', { className: 'harp-title' }, 'HARP'),
       !diagram && accounts.data && h('span', { className: 'harp-pill' }, accounts.data.accounts.length),
       h(SegmentedControl, { options: [
-        { id: 'summary', label: 'Summary' }, { id: 'diagram', label: 'Diagram' }, { id: 'delegation', label: 'Delegation' }, { id: 'jev', label: 'Type-safe' }, { id: 'anthropic', label: 'anthropic' }, { id: 'openai-codex', label: 'Codex' }, { id: 'settings', label: 'Settings' }
+        { id: 'summary', label: 'Summary' }, { id: 'diagram', label: 'Diagram' }, { id: 'delegation', label: 'Delegation' }, { id: 'jev', label: 'Type-safe' }, { id: 'anthropic', label: 'anthropic' }, { id: 'openai-codex', label: 'Codex' }, { id: 'api', label: 'API key' }, { id: 'settings', label: 'Settings' }
       ], value: top, onChange: pickTop }),
       h('span', { className: 'harp-grow' }),
       !diagram && h(Button, { size: 'sm', variant: 'ghost', 'aria-label': 'Refresh', disabled: accounts.isFetching || usage.isFetching,
@@ -1530,7 +1605,7 @@ function HarpPage() {
         { id: 'report', label: 'Report' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }], value: view, onChange: setView }),
       view === 'usage' && h('span', null, accounts.data?.live_read_at ? `Live usage read ${stamp(accounts.data.live_read_at * 1000, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'Live usage not read yet')),
     h('div', { className: 'harp-body' }, top === 'summary' ? h(SummaryView, { onOpen: pickTop })
-      : top === 'delegation' ? h(DelegationView, { showWeights, onWeightsShown: () => setShowWeights(false) }) : top === 'settings' ? h(QuotaSettings, { onOpen: pickTop, onWeights: () => { setShowWeights(true); pickTop('delegation') } }) : diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
+      : top === 'api' ? h(ApiKeysView) : top === 'delegation' ? h(DelegationView, { showWeights, onWeightsShown: () => setShowWeights(false) }) : top === 'settings' ? h(QuotaSettings, { onOpen: pickTop, onWeights: () => { setShowWeights(true); pickTop('delegation') } }) : diagram ? h(RouterView, { onAddKey: () => pickTop('jev') })
       : view === 'activity' ? h(ActivityView, { provider })
         : view === 'report' ? h(ReportView, { provider })
           : view === 'health' ? h(HealthView, { provider })

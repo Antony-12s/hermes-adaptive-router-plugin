@@ -6,7 +6,21 @@ import re
 import tempfile
 from pathlib import Path
 
-PROVIDERS = ("anthropic", "openai-codex")
+try:
+    from . import api_keys
+except ImportError:  # loaded by file path (plugin_api's _sibling) or as a top-level test module
+    import importlib.util as _util
+    import sys as _sys
+
+    if "harp_api_keys" not in _sys.modules:
+        _spec = _util.spec_from_file_location("harp_api_keys", Path(__file__).with_name("api_keys.py"))
+        _sys.modules["harp_api_keys"] = _util.module_from_spec(_spec)
+        _spec.loader.exec_module(_sys.modules["harp_api_keys"])
+    api_keys = _sys.modules["harp_api_keys"]
+
+SUBSCRIPTIONS = ("anthropic", "openai-codex")
+PROVIDERS = SUBSCRIPTIONS + api_keys.IDS
+EFFORT_TIER = {"low": 1, "medium": 2, "high": 3}
 EFFORTS = ("low", "medium", "high")
 DEFAULTS = {"classifier": "local", "jobs": []}
 
@@ -97,6 +111,22 @@ def select(goal, config, engine):
     return match, "local" if match else "hermes"
 
 
+def api_fallback(route, source, engine, fallback=None):
+    """A saved route on a subscription pool that is near its limit moves to an API key, when one is allowed."""
+    if route["provider"] not in SUBSCRIPTIONS:
+        return route, source
+    try:
+        load = engine.loads(engine.settings()).get(route["provider"]) or {}
+    except Exception:  # noqa: BLE001 - unknown load: keep the saved route
+        return route, source
+    if not load.get("pool_near_limit"):
+        return route, source
+    pick = (fallback or api_keys.fallback)(engine.home, EFFORT_TIER.get(route["reasoning_effort"], 2))
+    if not pick:
+        return route, source
+    return {"provider": pick["provider"], "model": pick["model"], "reasoning_effort": route["reasoning_effort"]}, f"{source}+api"
+
+
 def backend(engine_factory):
     from agent.delegation_provider import DelegationProvider, ROUTE_KEYS
 
@@ -129,6 +159,7 @@ def backend(engine_factory):
             if not job:
                 return default
             route = {"provider": job["provider"], "model": job["model"], "reasoning_effort": job["effort"]}
+            route, source = api_fallback(route, source, engine)
             try:
                 write(engine.home, "harp-delegation-latest.json", {**route, "job": job["name"], "source": source})
             except OSError:

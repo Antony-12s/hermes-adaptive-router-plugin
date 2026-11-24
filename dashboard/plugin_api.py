@@ -42,6 +42,7 @@ anthropic_plan = _sibling("anthropic_plan")
 compression = _sibling("compression")
 router_engine = _sibling("router_engine")
 delegation = _sibling("delegation")
+api_keys = _sibling("api_keys")
 
 POOL_LOCK = threading.Lock()
 LIVE = {}            # provider -> {"read_at": epoch, "accounts": {entry id: reading}}
@@ -636,9 +637,28 @@ def reset_running_total():
 
 @router.get("/delegation")
 def get_delegation():
-    return {"settings": delegation.settings(_home()),
+    rules = delegation.settings(_home())
+    saved = {job["provider"] for job in rules["jobs"]}
+    usable = [p for p in delegation.PROVIDERS
+              if p in delegation.SUBSCRIPTIONS or p in saved or api_keys.hermes_status(p)["configured"]]
+    return {"settings": rules,
             "latest": delegation.read(_home(), "harp-delegation-latest.json", None),
-            "models": {provider: _models(provider) for provider in delegation.PROVIDERS}}
+            "models": {provider: _models(provider) for provider in usable},
+            "labels": {provider: api_keys.LABEL.get(provider, provider) for provider in usable}}
+
+
+@router.get("/api-keys")
+def get_api_keys():
+    return api_keys.overview(_home())
+
+
+@router.post("/api-keys")
+def save_api_keys(body: dict):
+    try:
+        api_keys.save(_home(), body)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(400, str(error)) from error
+    return api_keys.overview(_home())
 
 
 @router.post("/delegation")

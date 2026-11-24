@@ -241,6 +241,11 @@ def _publish_quota(engine, settings, session, provider, decision):
                           and loads.get(name, {}).get("pool_has_room")), None)
             if other:
                 pick = ladder.rung(other, decision["tier"])
+            else:   # every subscription pool is near its limit: an API key, if the user allowed one
+                try:
+                    pick = _sibling("api_keys").fallback(engine.home, decision["tier"])
+                except Exception:  # noqa: BLE001 - no API fallback must still publish the notice
+                    pick = None
             quota = {"provider": provider, "used": active["used"], "pick": pick, "auto": settings["apply"]}
             broadcast_plugin_event("harp", "quota", {"session_id": session, "quota": quota})
             return

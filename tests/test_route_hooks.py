@@ -175,6 +175,26 @@ class HookTests(unittest.TestCase):
             harp._publish_quota(engine, settings, "chat", "anthropic", decision)
             self.assertIsNone(broadcast.call_args.args[2]["quota"]["pick"])
 
+    def test_with_the_ladder_an_api_key_is_offered_only_when_every_subscription_is_near_its_limit(self):
+        broadcast = Mock()
+        settings = {"apply": False, "ladder": True, "candidates": []}
+        decision = {"pick": "anthropic:claude-opus-5-5", "effort": "medium", "tier": 3}
+        anthropic = {"pool_near_limit": True, "pool_has_room": False, "used": 96}
+        codex = {"pool_near_limit": False, "pool_has_room": True, "used": 20}
+        engine = SimpleNamespace(home="h", loads=lambda _: {"anthropic": anthropic, "openai-codex": codex})
+        api = {"provider": "deepseek", "model": "deepseek-v4-pro", "effort": "high", "api": True}
+        keys = SimpleNamespace(fallback=Mock(return_value=api))
+        real = harp._sibling
+        with patch.dict(sys.modules, {"hermes_cli.plugin_events": SimpleNamespace(broadcast_plugin_event=broadcast)}), \
+                patch.object(harp, "_sibling", side_effect=lambda name: keys if name == "api_keys" else real(name)):
+            harp._publish_quota(engine, settings, "chat", "anthropic", decision)
+            self.assertEqual(broadcast.call_args.args[2]["quota"]["pick"]["provider"], "openai-codex")
+            keys.fallback.assert_not_called()
+            codex["pool_has_room"] = False
+            harp._publish_quota(engine, settings, "chat", "anthropic", decision)
+            self.assertEqual(broadcast.call_args.args[2]["quota"]["pick"], api)
+            keys.fallback.assert_called_once_with("h", 3)
+
     def test_apply_mode_routes_same_provider_only(self):
         self.run_turn(FakeEngine(apply=True))
         self.assertEqual(harp._TURN_ROUTES["s1"]["pick"], "anthropic:haiku")
