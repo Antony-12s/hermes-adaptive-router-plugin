@@ -111,6 +111,38 @@ def select(goal, config, engine):
     return match, "local" if match else "hermes"
 
 
+PIN = re.compile(r"([a-z0-9][a-z0-9_.-]{0,40}):([A-Za-z0-9][A-Za-z0-9_.:/-]{0,149})")
+PIN_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def model_options(config):
+    """The named routes under delegation.backends.model_map.options, so `option: hard` keeps working with HARP."""
+    backends = config.get("backends") if isinstance(config, dict) else None
+    model_map = backends.get("model_map") if isinstance(backends, dict) else None
+    rows = model_map.get("options") if isinstance(model_map, dict) else None
+    out = {}
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and all(isinstance(row.get(k), str) and row.get(k) for k in ("name", "provider", "model")):
+            out[row["name"]] = {"provider": row["provider"], "model": row["model"],
+                                "reasoning_effort": row.get("reasoning_effort") if row.get("reasoning_effort") in PIN_EFFORTS else "medium"}
+    return out
+
+
+def pinned_route(task, config):
+    """An explicit request bypasses HARP routing for this one task: `pin_model` (provider:model) or `option`."""
+    effort = task.get("pin_effort") if task.get("pin_effort") in PIN_EFFORTS else None
+    pin = task.get("pin_model")
+    if isinstance(pin, str) and pin.strip():
+        match = PIN.fullmatch(pin.strip())
+        if not match:
+            raise ValueError("pin_model must look like provider:model, e.g. anthropic:claude-fable-5-2")
+        return {"provider": match.group(1), "model": match.group(2), "reasoning_effort": effort or "high"}
+    option = model_options(config).get(task.get("option"))
+    if option:
+        return {**option, "reasoning_effort": effort or option["reasoning_effort"]}
+    return None
+
+
 def ladder_route(goal, engine):
     """{provider, model, reasoning_effort} from the router's cost ladder, or None to keep Hermes' default."""
     if not goal.strip():
@@ -156,15 +188,37 @@ def backend(engine_factory):
 
         def task_parameters(self, config):
             names = [job["name"] for job in settings(engine_factory().home)["jobs"]]
-            return {"harp_work": {"type": "string", "enum": names,
-                                  "description": "Use an explicitly requested HARP work type."}} if names else {}
+            params = {"pin_model": {"type": "string", "description": "Run this task on exactly this model, as provider:model "
+                                    "(e.g. anthropic:claude-fable-5-2). Bypasses HARP routing for this task only."},
+                      "pin_effort": {"type": "string", "enum": list(PIN_EFFORTS),
+                                     "description": "Reasoning effort for pin_model or option (default high for pin_model)."}}
+            options = model_options(dict(config))
+            if options:
+                params["option"] = {"type": "string", "enum": sorted(options),
+                                    "description": "Run this task on a named route; bypasses HARP routing for this task only."}
+            if names:
+                params["harp_work"] = {"type": "string", "enum": names, "description": "Use an explicitly requested HARP work type."}
+            return params
 
         def description(self, config):
-            return "Set harp_work only when the user named a configured work type."
+            return ("HARP picks the model for each task by difficulty and quota. When the user asks for a specific model, "
+                    "set pin_model (provider:model) or option; that task skips HARP routing. Set harp_work only when the "
+                    "user named a configured work type.")
 
         def route_task(self, task, config):
             default = {key: value for key, value in config.items() if key in ROUTE_KEYS}
             engine = engine_factory()
+            try:
+                pinned = pinned_route(task, dict(config))
+            except ValueError as error:
+                from agent.delegation_provider import DelegationRouteError
+                raise DelegationRouteError(str(error)) from error
+            if pinned:
+                try:
+                    write(engine.home, "harp-delegation-latest.json", {**pinned, "job": "Requested model", "source": "pinned"})
+                except OSError:
+                    pass
+                return pinned
             rules = settings(engine.home)
             explicit = task.get("harp_work")
             job = next((item for item in rules["jobs"] if item["name"] == explicit), None)
