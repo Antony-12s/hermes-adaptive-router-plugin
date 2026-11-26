@@ -101,6 +101,30 @@ def _find_agent(session_id):
     return None
 
 
+CREDIT_WALL_CODES = {"credits_required", "out_of_credits"}
+
+
+def classify_credit_wall(provider="", model="", error_code="", error_message="", error_body=None, **_):
+    """transform_api_error_classification: Anthropic answers a model that needs paid usage credits
+    (e.g. Fable) with HTTP 429. Hermes reads that as a rate limit, retries and rotates through every
+    account, which cannot help and leaves the healthy accounts cooling down. Stop instead, keep the
+    account, and ask the user which model to use."""
+    if provider != "anthropic":
+        return None
+    error = (error_body or {}).get("error") if isinstance(error_body, dict) else None
+    details = error.get("details") if isinstance(error, dict) else None
+    details = details if isinstance(details, dict) else {}
+    codes = {str(error_code or ""), str(details.get("error_code") or ""), str(details.get("disabled_reason") or "")}
+    if not codes & CREDIT_WALL_CODES and "usage credits are required" not in str(error_message or "").lower():
+        return None
+    name = details.get("model_display_name") or model or "This model"
+    return {"reason": "model_entitlement", "retryable": False, "should_rotate_credential": False,
+            "should_fallback": False, "error_context": {"harp": "credit_wall", "model": model},
+            "message": f"{name} needs Anthropic usage credits on this account, so switching accounts will not help. "
+                       "Which model should I use instead? Pick one with /model (for example Opus 5.5 or Sonnet 5), "
+                       "or buy usage credits to keep using it."}
+
+
 def track_account(session_id=None, provider=None, platform=None, usage=None, model=None, response_model=None,
                   **_metadata):
     """post_api_request: count the call's tokens and session against the pool account it used."""
@@ -360,6 +384,7 @@ def register(ctx):
     ctx.register_hook("pre_llm_call", route_turn)
     ctx.register_hook("pre_api_request", remember_live_request)
     ctx.register_hook("post_auxiliary_call", record_auxiliary_request)
+    ctx.register_hook("transform_api_error_classification", classify_credit_wall)
     if hasattr(ctx, "register_delegation_provider"):
         try:
             provider = _sibling("delegation").backend(_engine)
