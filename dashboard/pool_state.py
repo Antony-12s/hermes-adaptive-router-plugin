@@ -127,9 +127,9 @@ class Store:
 
     def set_alerts(self, changes):
         merged = {**self.alerts(), **changes}
-        if set(merged) != set(ALERT_DEFAULTS) or not all(type(merged[k]) is bool for k in ("desktop", "telegram")) \
+        if set(merged) != set(ALERT_DEFAULTS) or not all(type(merged[k]) is bool for k in ("desktop", "telegram", "auto_balance")) \
                 or type(merged["threshold"]) not in (int, float) or not 50 <= merged["threshold"] <= 100:
-            raise ValueError("Alerts: desktop and telegram are on or off; the threshold is 50 to 100%.")
+            raise ValueError("Alerts: desktop, telegram and auto-balance are on or off; the threshold is 50 to 100%.")
         self._put("alerts", merged)
         return merged
 
@@ -145,13 +145,13 @@ class Store:
         return self._load()["last_tick"]
 
 
-ALERT_DEFAULTS = {"desktop": False, "telegram": False, "threshold": 90}
+ALERT_DEFAULTS = {"desktop": False, "telegram": False, "threshold": 90, "auto_balance": False}
 TIMER_PROVIDERS = ("anthropic", "openai-codex")
 
 
 def timer_needed(store):
     settings = store.alerts()
-    return bool(store.schedules()) or settings["desktop"] or settings["telegram"]
+    return bool(store.schedules()) or settings["desktop"] or settings["telegram"] or settings["auto_balance"]
 
 
 def park(store, pool, provider, entry_id, until, by, now=None):
@@ -495,19 +495,45 @@ def _windows(snapshot):
     return session, week
 
 
-def run_timer(store, db, pool_for, now, read, send):
-    """One timer run: apply park schedules, then (alerts on) read each account's usage, keep a
-    snapshot for the report, raise and clear alerts, and send each new alert once."""
+def _peak(session, week):
+    """(percent, reset epoch) of the fuller window, the shape pool_actions.Row expects."""
+    windows = [w for w in (session, week) if w is not None]
+    if not windows:
+        return None
+    top = max(windows, key=lambda w: w.used_percent)
+    return top.used_percent, top.reset_at.timestamp() if top.reset_at else None
+
+
+def auto_balance(pool, rows, balance):
+    """Bench accounts at the balance threshold and release recovered ones. Returns the plan, or
+    None when nothing needs to change (a hot account that is already benched is not a change)."""
+    plan = balance.plan_balance(rows)
+    if plan is None:
+        return None
+    benched = {r.id for r in rows if r.benched}
+    if set(plan["bench"]) <= benched and not plan["release"]:
+        return None
+    balance.apply_balance(pool, plan)
+    return plan
+
+
+def run_timer(store, db, pool_for, now, read, send, balance=None):
+    """One timer run: apply park schedules, then (alerts or auto-balance on) read each account's
+    usage, keep a snapshot for the report, bench full accounts, raise and clear alerts, and send
+    each new alert once. `balance` is the pool_actions module (passed in: siblings load by path)."""
     lines = tick(store, pool_for, now)
     epoch = now.timestamp()
     for line in lines:
         provider, _, text = line.partition(": ")
         log_event(db, provider, "schedule", text, "timer", epoch)
     settings = store.alerts()
-    if settings["desktop"] or settings["telegram"]:
+    alerting = settings["desktop"] or settings["telegram"]
+    balancing = settings["auto_balance"] and balance is not None
+    if alerting or balancing:
         for provider in TIMER_PROVIDERS:
-            accounts = []
-            for entry in pool_for(provider).entries():
+            pool = pool_for(provider)
+            accounts, rows = [], []
+            for entry in pool.entries():
                 status = getattr(entry, "last_status", None)
                 parked = getattr(entry, "last_error_reason", None) == PARK_REASON
                 row = {"label": entry.label or entry.id, "status": status, "session": None, "week": None,
@@ -517,6 +543,9 @@ def run_timer(store, db, pool_for, now, read, send):
                         session, week = _windows(read(provider, entry))
                     except Exception:  # noqa: BLE001 - one unreadable account must not stop the run
                         session = week = None
+                    if balancing:
+                        rows.append(balance.Row(entry.id, row["label"], entry.priority, status,
+                                                _peak(session, week), balance.benched_by_harp(entry)))
                     if session is not None:
                         row["session"] = session.used_percent
                     if week is not None:
@@ -527,7 +556,19 @@ def run_timer(store, db, pool_for, now, read, send):
                         record_snapshot(db, provider, row["label"], peak, epoch)
                 if not parked:
                     accounts.append(row)
-            if not accounts:
+            plan = auto_balance(pool, rows, balance) if balancing and rows else None
+            if plan:
+                label = {r.id: r.label for r in rows}
+                text = f"Now using {label[plan['order'][0]]}"
+                if plan["bench"]:
+                    text += f"; benched {', '.join(label[i] for i in plan['bench'])} (usage at 90% or more)"
+                if plan["release"]:
+                    text += f"; {', '.join(label[i] for i in plan['release'])} back in rotation"
+                log_event(db, provider, "balance", text, "timer", epoch)
+                lines.append(f"{provider}: {text}")
+                if alerting:
+                    send(f"HARP: {provider}", text)
+            if not accounts or not alerting:
                 continue
             before = store.alert_state().get(provider, {})
             active, raised, cleared = evaluate_alerts(before, accounts, settings["threshold"], epoch)

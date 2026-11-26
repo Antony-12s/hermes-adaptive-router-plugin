@@ -343,7 +343,8 @@ def run_tick(_args=None):
     state = _sibling("pool_state")
     store = state.Store(_hermes_home())
     lines = state.run_timer(store, _hermes_home() / "harp-activity.sqlite3", load_pool, datetime.now(),
-                            read=read_usage, send=_sibling("harp_timer").sender(store.alerts()))
+                            read=read_usage, send=_sibling("harp_timer").sender(store.alerts()),
+                            balance=_sibling("pool_actions"))
     for line in lines:
         print(line)
 

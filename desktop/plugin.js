@@ -1536,12 +1536,14 @@ function AlertsView({ provider }) {
       h(Switch, { checked: s.desktop, disabled: busy, 'aria-label': 'Desktop notifications', onCheckedChange: value => save({ desktop: value }) })),
     h('div', { className: 'harp-setting' }, h('div', { className: 'harp-grow' }, h('b', null, 'Telegram'), h('span', null, 'To the Telegram bot\'s home channel through hermes send (send /sethome to the bot first).')),
       h(Switch, { checked: s.telegram, disabled: busy, 'aria-label': 'Telegram alerts', onCheckedChange: value => save({ telegram: value }) })),
+    h('div', { className: 'harp-setting' }, h('div', { className: 'harp-grow' }, h('b', null, 'Switch accounts automatically'), h('span', null, 'Every 5 minutes, an account at 90% or more steps aside until its window resets and the account with the most left takes over. Set Alert at below 90% to get a warning first.')),
+      h(Switch, { checked: !!s.auto_balance, disabled: busy, 'aria-label': 'Switch accounts automatically', onCheckedChange: value => save({ auto_balance: value }) })),
     h('div', { className: 'harp-setting' }, h('div', { className: 'harp-grow' }, h('b', null, 'Alert at'), h('span', null, 'Usage percent, 50 to 100.')),
       h(Input, { value: level, disabled: busy, 'aria-label': 'Alert threshold', onChange: event => setThreshold(event.target.value),
         onBlur: () => { if (levelOk && Number(level) !== s.threshold) save({ threshold: Number(level) }) } }), '%'),
     h('div', { className: 'harp-tools' }, h(Button, { size: 'sm', variant: 'outline', disabled: busy || !(s.desktop || s.telegram), onClick: test },
       h(Codicon, { name: 'bell', size: '0.8rem' }), 'Send a test alert'),
-      data.timer_installed ? 'HARP Timer active.' : (s.desktop || s.telegram) ? 'HARP Timer is not installed: save a setting again.' : 'HARP Timer off.'),
+      data.timer_installed ? 'HARP Timer active.' : (s.desktop || s.telegram || s.auto_balance) ? 'HARP Timer is not installed: save a setting again.' : 'HARP Timer off.'),
     h(Section, { title: 'ACTIVE NOW' }, data.active.length
       ? data.active.map(a => h('div', { className: 'harp-check', key: a.key }, h('i', { className: 'warn' }), h('span', { className: 'harp-grow' }, a.text), h('span', { className: 'harp-status' }, `since ${when(a.since)}`)))
       : h('div', { className: 'harp-empty' }, 'None.')))

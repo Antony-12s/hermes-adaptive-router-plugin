@@ -532,6 +532,18 @@ test('activity, report, health and alerts render their own data', async () => {
   assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/alerts').body)), { desktop: true })
 })
 
+test('alerts tab can switch accounts automatically before one runs out', async () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.alerts = { data: { settings: { desktop: false, telegram: false, threshold: 80, auto_balance: false }, timer_installed: false, active: [] } }
+  tab(app, 'Alerts').props.onClick()
+  const page = app.render()
+  assert.match(app.text(page), /Switch accounts automatically/)
+  const toggle = app.nodes(page, n => n.type === 'switch' && n.props['aria-label'] === 'Switch accounts automatically')[0]
+  assert.equal(toggle.props.checked, false)
+  await toggle.props.onCheckedChange(true)
+  assert.deepEqual(JSON.parse(JSON.stringify(app.requests.find(r => r?.path === '/alerts').body)), { auto_balance: true })
+})
+
 
 function routerData(over = {}) {
   return {
