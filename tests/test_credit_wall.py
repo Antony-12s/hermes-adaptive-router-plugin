@@ -17,11 +17,14 @@ class CreditWallTests(unittest.TestCase):
         kwargs.update(overrides)
         return harp.classify_credit_wall(**kwargs)
 
-    def test_a_credit_wall_stops_without_retry_or_account_switch_and_asks_for_a_model(self):
+    def test_a_credit_wall_moves_to_the_next_account_at_once_and_asks_when_none_is_left(self):
         verdict = self.classify()
-        self.assertEqual(verdict["reason"], "model_entitlement")
+        # billing + usage_window: Hermes rotates immediately and benches only this model on this
+        # account until its window resets (model_entitlement would bench it for a year).
+        self.assertEqual(verdict["reason"], "billing")
+        self.assertIs(verdict["error_context"]["usage_window"], True)
+        self.assertIs(verdict["should_rotate_credential"], True)
         self.assertIs(verdict["retryable"], False)
-        self.assertIs(verdict["should_rotate_credential"], False)
         self.assertIs(verdict["should_fallback"], False)
         self.assertIn("Fable", verdict["message"])
         self.assertIn("/model", verdict["message"])

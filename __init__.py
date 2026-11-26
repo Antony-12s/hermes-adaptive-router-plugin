@@ -105,10 +105,11 @@ CREDIT_WALL_CODES = {"credits_required", "out_of_credits"}
 
 
 def classify_credit_wall(provider="", model="", error_code="", error_message="", error_body=None, **_):
-    """transform_api_error_classification: Anthropic answers a model that needs paid usage credits
-    (e.g. Fable) with HTTP 429. Hermes reads that as a rate limit, retries and rotates through every
-    account, which cannot help and leaves the healthy accounts cooling down. Stop instead, keep the
-    account, and ask the user which model to use."""
+    """transform_api_error_classification: when an Anthropic account's allowance for a model such as
+    Fable is used up, Anthropic answers HTTP 429 credits_required. Hermes reads that as a plain rate
+    limit: it retries the same account with long backoffs. Report it as a usage-window billing wall
+    instead, so Hermes moves to the next account at once and benches only this model on this account
+    until the window resets. When no account is left the turn ends with a question for the user."""
     if provider != "anthropic":
         return None
     error = (error_body or {}).get("error") if isinstance(error_body, dict) else None
@@ -118,11 +119,11 @@ def classify_credit_wall(provider="", model="", error_code="", error_message="",
     if not codes & CREDIT_WALL_CODES and "usage credits are required" not in str(error_message or "").lower():
         return None
     name = details.get("model_display_name") or model or "This model"
-    return {"reason": "model_entitlement", "retryable": False, "should_rotate_credential": False,
-            "should_fallback": False, "error_context": {"harp": "credit_wall", "model": model},
-            "message": f"{name} needs Anthropic usage credits on this account, so switching accounts will not help. "
+    return {"reason": "billing", "retryable": False, "should_rotate_credential": True,
+            "should_fallback": False, "error_context": {"usage_window": True, "harp": "credit_wall", "model": model},
+            "message": f"{name} is out of allowance on every Anthropic account right now. "
                        "Which model should I use instead? Pick one with /model (for example Opus 5.5 or Sonnet 5), "
-                       "or buy usage credits to keep using it."}
+                       "wait for the window to reset, or buy usage credits."}
 
 
 def track_account(session_id=None, provider=None, platform=None, usage=None, model=None, response_model=None,
