@@ -91,6 +91,23 @@ function fixture(usage, session = {}) {
     countdown: (...args) => sandbox.countdown(...args) }
 }
 
+test('auto-switch waits for a working chat, then switches as soon as it is idle', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] })
+  const session = { id: 'chat', busy: true }
+  const app = fixture({}, session)
+  t.after(app.dispose)
+  const quota = { provider: 'openai-codex', used: 83, auto: true, pick: { provider: 'anthropic', model: 'claude-haiku-5-5', effort: 'low' } }
+  app.quotaEvent({ session_id: 'chat', quota })
+  t.mock.timers.tick(21000)
+  assert.equal(app.requests.filter(x => x.op === 'config.set').length, 0)
+  session.busy = false
+  app.onBusy()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(app.requests.filter(x => x.op === 'config.set').map(x => [x.session_id, x.key, x.value]), [
+    ['chat', 'model', 'claude-haiku-5-5 --provider anthropic --session'], ['chat', 'reasoning', 'low']
+  ])
+})
+
 test('the focused chat can ignore, toggle and explicitly apply its quota route', async (t) => {
   const session = { id: 'chat', busy: true }
   const app = fixture({}, session)
