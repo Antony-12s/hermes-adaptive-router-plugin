@@ -129,6 +129,7 @@ def _read_all(provider, pool):
             readings[entry.id] = {"peak": None, "windows": [],
                                   "check": typesafe.check(entry.runtime_api_key, entry.runtime_base_url or typesafe.BASE_URL)}
             continue
+        entry = actions.fresh_entry(pool, entry)
         snapshots[entry.id] = _read_usage(provider, entry)
         readings[entry.id] = _reading(snapshots[entry.id])
         if provider == "anthropic" and not readings[entry.id]["plan"]:   # Hermes' usage API has no plan

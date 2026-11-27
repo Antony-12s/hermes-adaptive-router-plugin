@@ -517,6 +517,38 @@ def auto_balance(pool, rows, balance):
     return plan
 
 
+def balance_pool(db, pool, provider, read, balance, epoch, by):
+    """Read every live account of one pool and run auto_balance on it. Returns the log text, or None
+    when nothing changed. Used by a chat call that may have pushed its account over the line."""
+    rows = []
+    for entry in pool.entries():
+        status = getattr(entry, "last_status", None)
+        if status == "dead" or getattr(entry, "last_error_reason", None) == PARK_REASON:
+            continue
+        entry = balance.fresh_entry(pool, entry)
+        try:
+            session, week = _windows(read(provider, entry))
+        except Exception:  # noqa: BLE001 - one unreadable account must not stop the run
+            session = week = None
+        rows.append(balance.Row(entry.id, entry.label or entry.id, entry.priority, status,
+                                _peak(session, week), balance.benched_by_harp(entry)))
+    plan = auto_balance(pool, rows, balance) if rows else None
+    if not plan:
+        return None
+    text = _balance_text(plan, {r.id: r.label for r in rows})
+    log_event(db, provider, "balance", text, by, epoch)
+    return text
+
+
+def _balance_text(plan, label):
+    text = f"Now using {label[plan['order'][0]]}"
+    if plan["bench"]:
+        text += f"; benched {', '.join(label[i] for i in plan['bench'])} (usage at 90% or more)"
+    if plan["release"]:
+        text += f"; {', '.join(label[i] for i in plan['release'])} back in rotation"
+    return text
+
+
 def run_timer(store, db, pool_for, now, read, send, balance=None):
     """One timer run: apply park schedules, then (alerts or auto-balance on) read each account's
     usage, keep a snapshot for the report, bench full accounts, raise and clear alerts, and send
@@ -539,6 +571,8 @@ def run_timer(store, db, pool_for, now, read, send, balance=None):
                 row = {"label": entry.label or entry.id, "status": status, "session": None, "week": None,
                        "week_reset": None}
                 if status != "dead" and not parked:
+                    if balance is not None:
+                        entry = balance.fresh_entry(pool, entry)
                     try:
                         session, week = _windows(read(provider, entry))
                     except Exception:  # noqa: BLE001 - one unreadable account must not stop the run
@@ -558,12 +592,7 @@ def run_timer(store, db, pool_for, now, read, send, balance=None):
                     accounts.append(row)
             plan = auto_balance(pool, rows, balance) if balancing and rows else None
             if plan:
-                label = {r.id: r.label for r in rows}
-                text = f"Now using {label[plan['order'][0]]}"
-                if plan["bench"]:
-                    text += f"; benched {', '.join(label[i] for i in plan['bench'])} (usage at 90% or more)"
-                if plan["release"]:
-                    text += f"; {', '.join(label[i] for i in plan['release'])} back in rotation"
+                text = _balance_text(plan, {r.id: r.label for r in rows})
                 log_event(db, provider, "balance", text, "timer", epoch)
                 lines.append(f"{provider}: {text}")
                 if alerting:

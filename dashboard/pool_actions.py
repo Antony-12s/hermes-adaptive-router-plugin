@@ -37,6 +37,29 @@ def account_peak(snapshot):
     return top.used_percent, top.reset_at.timestamp() if top.reset_at else None
 
 
+def fresh_entry(pool, entry):
+    """An idle OAuth account's access token expires, and a read-only usage read then returns nothing
+    ("No reading"), which also stops auto-balance from releasing it. Renew the token through Hermes'
+    own pool refresh (cross-process locked, persisted) before reading. Private Hermes API, so any
+    failure or a Hermes without it keeps the entry as it is."""
+    try:
+        if not pool._entry_needs_refresh(entry):
+            return entry
+        fresh = pool._refresh_entry(entry, force=False) or entry
+        if getattr(entry, "last_status", None) == "exhausted" and getattr(fresh, "last_status", None) != "exhausted":
+            # Hermes clears a credential's status when it renews the token: put the bench back as it was,
+            # or an account still at 100% would rejoin the rotation until its window resets.
+            pool.mark_exhausted_and_rotate(status_code=429, credential_id=entry.id, error_context={
+                "reason": getattr(entry, "last_error_reason", None) or "rate_limit_error",
+                "message": getattr(entry, "last_error_message", None) or "",
+                "reset_at": getattr(entry, "last_error_reset_at", None) or time.time() + 3600,
+            })
+            fresh = next((e for e in pool.entries() if e.id == entry.id), fresh)
+        return fresh
+    except Exception:  # noqa: BLE001 - a read must never fail on a refresh
+        return entry
+
+
 def benched_by_harp(entry):
     return getattr(entry, "last_status", None) == "exhausted" and BENCH_MARK in (
         getattr(entry, "last_error_message", None) or "")

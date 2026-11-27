@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -141,8 +142,30 @@ def track_account(session_id=None, provider=None, platform=None, usage=None, mod
             _hermes_home() / "harp-activity.sqlite3", pool_provider, entry.label or entry.id,
             str(session_id), platform or getattr(agent, "platform", "") or "", reported_tokens(usage),
             model=str(response_model or model or getattr(agent, "model", "") or "?").split("/")[-1])
+        if pool_provider in _sibling("pool_state").TIMER_PROVIDERS:
+            balance_soon(pool, pool_provider, _hermes_home())
     except Exception:  # noqa: BLE001 - tracking must never break a turn
         pass
+
+
+BALANCE_EVERY = 60         # seconds between chat-triggered balances per provider
+_BALANCED_AT = {}
+
+
+def balance_soon(pool, provider, home, clock=time.time, start=None):
+    """After a chat call, balance this pool in the background (at most once a minute) when
+    auto-balance is on, so an account that just crossed 90% steps aside before the next call
+    instead of waiting up to 5 minutes for the HARP Timer and running into a 429."""
+    state = _sibling("pool_state")
+    if not state.Store(home).alerts()["auto_balance"]:
+        return
+    now = clock()
+    if now - _BALANCED_AT.get(provider, 0) < BALANCE_EVERY:
+        return
+    _BALANCED_AT[provider] = now
+    job = lambda: state.balance_pool(home / "harp-activity.sqlite3", pool, provider, read_usage,
+                                     _sibling("pool_actions"), now, "chat")
+    (start or (lambda fn: threading.Thread(target=fn, daemon=True, name="harp-balance").start()))(job)
 
 
 _ENGINE = None
