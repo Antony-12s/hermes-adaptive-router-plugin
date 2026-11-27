@@ -108,6 +108,17 @@ test('auto-switch waits for a working chat, then switches as soon as it is idle'
   ])
 })
 
+test('Settings dropdowns use the themed picker, so every option is readable', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.compression = { data: { enabled: true, threshold: 0.5, presets: [0.5, 0.6, 0.75, 0.85] }, refetch() {} }
+  app.results.router = { data: { settings: { apply: false } } }
+  button(app, app.render(), 'Settings').props.onClick()
+  const page = app.render()
+  for (const label of ['Auto-compress context at', 'Quota display']) {
+    assert.equal(app.nodes(page, n => n.type === 'select' && n.props['aria-label'] === label).length, 1, label)
+  }
+})
+
 test('the focused chat can ignore, toggle and explicitly apply its quota route', async (t) => {
   const session = { id: 'chat', busy: true }
   const app = fixture({}, session)

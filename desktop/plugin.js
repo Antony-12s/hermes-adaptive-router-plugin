@@ -326,8 +326,7 @@ function CompressSetting() {
     }
   }
   return h('label', { className: 'harp-field' }, 'Auto-compress context at ',
-    h('select', { value: current, disabled: saving || !query.data, onChange: e => save(e.target.value) },
-      ...[['0.5', '50%'], ['0.6', '60%'], ['0.75', '75%'], ['0.85', '85%'], ['off', 'Off']].map(([value, label]) => h('option', { key: value, value }, label))),
+    h(Pick, { value: current, label: 'Auto-compress context at', options: [['0.5', '50%'], ['0.6', '60%'], ['0.75', '75%'], ['0.85', '85%'], ['off', 'Off']].map(([value, label]) => ({ value, label })), onChange: save }),
     h('small', { className: 'harp-muted' }, ' New chats use this; open chats follow after they restart.'),
     error && h('small', { role: 'alert' }, ` ${error}`))
 }
@@ -339,11 +338,11 @@ function QuotaSettings({ onOpen, onWeights }) {
     h('div', { className: 'harp-tools' },
       h(QuotaNotice, { settingsOnly: true, defaultAuto: !!query.data?.settings?.apply }),
       h(CompressSetting),
-      h('label', null, 'Quota display ', h('select', { value: meter, onChange: e => {
-        quotaMeter = e.target.value
+      h('label', null, 'Quota display ', h(Pick, { value: meter, label: 'Quota display', options: [{ value: 'bar', label: 'Progress bar' }, { value: 'ring', label: 'Ring' }], onChange: v => {
+        quotaMeter = v
         setMeter(quotaMeter)
         syncQuota()
-      } }, h('option', { value: 'bar' }, 'Progress bar'), h('option', { value: 'ring' }, 'Ring'))))),
+      } })))),
     h(Section, { title: 'ROUTING SETUP' },
       h('div', { className: 'harp-tools' },
         h(Button, { size: 'sm', onClick: onWeights }, 'Provider weights'),
