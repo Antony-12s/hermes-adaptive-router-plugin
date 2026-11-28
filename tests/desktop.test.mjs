@@ -119,6 +119,22 @@ test('Settings dropdowns use the themed picker, so every option is readable', ()
   }
 })
 
+test('Settings shows the fallback chain and sets it up in one click', async () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.router = { data: { settings: { apply: false } } }
+  app.results.fallback = { data: { primary: 'anthropic', chain: [], suggested: [{ provider: 'nous', model: 'google/gemini-3.1-pro-preview' }] }, refetch() {} }
+  button(app, app.render(), 'Settings').props.onClick()
+  let page = app.render()
+  assert.match(app.text(page), /PROVIDER FALLBACK/)
+  assert.match(app.text(page), /No fallback/)
+  await button(app, page, 'Set up fallback').props.onClick()
+  assert.ok(app.requests.find(r => r?.path === '/fallback/setup' && r.method === 'POST'))
+  app.results.fallback = { data: { primary: 'anthropic', chain: [{ provider: 'nous', model: 'google/gemini-3.1-pro-preview' }], suggested: [] }, refetch() {} }
+  page = app.render()
+  assert.match(app.text(page), /nous · google\/gemini-3.1-pro-preview/)
+  assert.equal(button(app, page, 'Set up fallback').props.disabled, true)
+})
+
 test('the focused chat can ignore, toggle and explicitly apply its quota route', async (t) => {
   const session = { id: 'chat', busy: true }
   const app = fixture({}, session)

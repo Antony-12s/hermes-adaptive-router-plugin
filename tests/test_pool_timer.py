@@ -61,7 +61,7 @@ class TimerRunTests(unittest.TestCase):
         for bad in ({"threshold": 0}, {"threshold": 101}, {"desktop": "yes"}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 self.store.set_alerts(bad)
-        self.assertEqual(self.store.alerts(), {"desktop": False, "telegram": False, "threshold": 90, "auto_balance": False})
+        self.assertEqual(self.store.alerts(), {"desktop": False, "telegram": False, "threshold": 90, "auto_balance": True})
         with self.assertRaises(ValueError):
             self.store.set_alerts({"auto_balance": "on"})
 
@@ -114,12 +114,13 @@ class AutoBalanceTests(unittest.TestCase):
         return state.run_timer(self.store, self.db, self.pools.__getitem__, datetime.fromtimestamp(now),
                                read=read, send=lambda *message: self.sent.append(message), balance=pool_actions)
 
-    def test_auto_balance_alone_needs_the_timer(self):
-        self.assertFalse(state.timer_needed(self.store))
-        self.store.set_alerts({"auto_balance": True})
+    def test_auto_balance_is_on_out_of_the_box_and_alone_needs_the_timer(self):
         self.assertTrue(state.timer_needed(self.store))
+        self.store.set_alerts({"auto_balance": False})
+        self.assertFalse(state.timer_needed(self.store))
 
-    def test_off_by_default_changes_nothing(self):
+    def test_switched_off_it_changes_nothing(self):
+        self.store.set_alerts({"auto_balance": False})
         self.run_once(1_000_000)
         self.assertIsNone(self.pro.last_status)
 

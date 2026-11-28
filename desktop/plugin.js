@@ -331,6 +331,26 @@ function CompressSetting() {
     error && h('small', { role: 'alert' }, ` ${error}`))
 }
 
+function FallbackSetting() {
+  const query = useQuery({ queryKey: [ID, 'fallback'], queryFn: () => rest('/fallback') })
+  const [busy, setBusy] = useState(false)
+  const data = query.data
+  const chain = data?.chain || []
+  const setup = async () => {
+    setBusy(true)
+    try {
+      const result = await post('/fallback/setup', {})
+      notify('success', result.added?.length ? `Fallback set: ${result.chain.map(e => e.provider).join(' > ')}` : 'Nothing to add: every signed-in provider is already a fallback.')
+      query.refetch?.()
+    } catch (error) { notify('error', failure(error)) } finally { setBusy(false) }
+  }
+  return h(Section, { title: 'PROVIDER FALLBACK' },
+    h('div', { className: 'harp-tools' },
+      h('span', null, chain.length ? chain.map(e => `${e.provider} · ${e.model}`).join('  >  ') : 'No fallback: a safety-filter block or outage on the main provider stops the chat.'),
+      h(Button, { size: 'sm', disabled: busy || !data?.suggested?.length, onClick: setup }, 'Set up fallback')),
+    h('small', { className: 'harp-muted' }, 'Adds the other providers you are signed in to, so Hermes moves to them when the main model refuses or fails. Applies after the gateway restarts.'))
+}
+
 function QuotaSettings({ onOpen, onWeights }) {
   const query = useQuery({ queryKey: [ID, 'router'], queryFn: () => rest('/router'), refetchInterval: 30000 })
   const [meter, setMeter] = useState(quotaMeter)
@@ -343,6 +363,7 @@ function QuotaSettings({ onOpen, onWeights }) {
         setMeter(quotaMeter)
         syncQuota()
       } })))),
+    h(FallbackSetting),
     h(Section, { title: 'ROUTING SETUP' },
       h('div', { className: 'harp-tools' },
         h(Button, { size: 'sm', onClick: onWeights }, 'Provider weights'),

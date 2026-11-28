@@ -145,7 +145,7 @@ class Store:
         return self._load()["last_tick"]
 
 
-ALERT_DEFAULTS = {"desktop": False, "telegram": False, "threshold": 90, "auto_balance": False}
+ALERT_DEFAULTS = {"desktop": False, "telegram": False, "threshold": 90, "auto_balance": True}
 TIMER_PROVIDERS = ("anthropic", "openai-codex")
 
 

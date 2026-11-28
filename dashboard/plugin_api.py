@@ -37,6 +37,7 @@ actions = _sibling("pool_actions")
 relay_mod = _sibling("signin_relay")
 pool_state = _sibling("pool_state")
 timer = _sibling("harp_timer")
+fallback_setup = _sibling("fallback_setup")
 typesafe = _sibling("typesafe")
 anthropic_plan = _sibling("anthropic_plan")
 compression = _sibling("compression")
@@ -158,11 +159,17 @@ def _read_all(provider, pool):
     return snapshots
 
 
+_TIMER_CHECKED = []
+
+
 @router.get("/accounts")
 def get_accounts(provider: str):
     """Read account metadata and the active profile's quota from Hermes."""
     if provider not in {"anthropic", "jev", "openai-codex"}:
         raise HTTPException(400, "Unknown HARP provider")
+    if not _TIMER_CHECKED:   # first page load: auto-balance is on by default, so start its timer
+        _TIMER_CHECKED.append(True)
+        fallback_setup.ensure_timer(pool_state.timer_needed(_store()), timer, str(_home()))
 
     from hermes_cli.auth import read_credential_pool
 
@@ -697,6 +704,39 @@ def _hermes_cli(args, timeout=30):
     launcher = shutil.which("hermes")
     command = [launcher, *args] if launcher else [sys.executable, "-m", "hermes_cli.main", *args]
     return subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=_hermes_env(), stdin=subprocess.DEVNULL)
+
+
+def _fallback_state():
+    from hermes_cli.config import load_config
+    from hermes_cli.auth import read_credential_pool
+
+    config = load_config()
+    model = config.get("model") if isinstance(config.get("model"), dict) else {}
+    primary = str(model.get("provider") or "")
+    chain = list(config.get("fallback_providers") or [])
+    return config, primary, chain, fallback_setup.plan(primary, chain, read_credential_pool)
+
+
+@router.get("/fallback")
+def get_fallback():
+    _config, primary, chain, planned = _fallback_state()
+    return {"primary": primary, "chain": chain, "suggested": planned[len(chain):]}
+
+
+@router.post("/fallback/setup")
+def setup_fallback(body: dict = None):
+    """Append every signed-in OAuth provider other than the main one to Hermes' fallback chain."""
+    from hermes_cli.config import save_config
+
+    config, primary, chain, planned = _fallback_state()
+    added = planned[len(chain):]
+    if added:
+        config["fallback_providers"] = planned
+        config.pop("fallback_model", None)
+        save_config(config)
+        _log(primary or "anthropic", "fallback", "Fallback chain: " + " > ".join(
+            f"{e['provider']} {e['model']}" for e in planned))
+    return {"chain": planned, "added": added}
 
 
 @router.get("/compression")

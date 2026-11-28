@@ -136,8 +136,9 @@ class BalanceNowTests(Fixture):
         started = []
         clock = iter([1000.0, 1010.0, 1100.0]).__next__
         harp._BALANCED_AT.clear()
+        self.store.set_alerts({"auto_balance": False})
         harp.balance_soon(self.pool, "anthropic", self.home, clock=lambda: 1000.0, start=started.append)
-        self.assertEqual(started, [])   # off by default
+        self.assertEqual(started, [])   # switched off
         self.store.set_alerts({"auto_balance": True})
         for _ in range(3):
             harp.balance_soon(self.pool, "anthropic", self.home, clock=clock, start=started.append)
