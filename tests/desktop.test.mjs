@@ -135,6 +135,17 @@ test('Settings shows the fallback chain and sets it up in one click', async () =
   assert.equal(button(app, page, 'Set up fallback').props.disabled, true)
 })
 
+test('a fallback chain that cannot be read is never shown as no fallback', () => {
+  const app = fixture({ configured: false, usage: [] })
+  app.results.router = { data: { settings: { apply: false } } }
+  app.results.fallback = { isError: true, data: undefined, refetch() {} }
+  button(app, app.render(), 'Settings').props.onClick()
+  const page = app.render()
+  assert.doesNotMatch(app.text(page), /No fallback/)
+  assert.match(app.text(page), /Could not read the fallback chain/)
+  assert.equal(button(app, page, 'Set up fallback').props.disabled, true)
+})
+
 test('the focused chat can ignore, toggle and explicitly apply its quota route', async (t) => {
   const session = { id: 'chat', busy: true }
   const app = fixture({}, session)

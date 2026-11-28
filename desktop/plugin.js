@@ -346,7 +346,9 @@ function FallbackSetting() {
   }
   return h(Section, { title: 'PROVIDER FALLBACK' },
     h('div', { className: 'harp-tools' },
-      h('span', null, chain.length ? chain.map(e => `${e.provider} · ${e.model}`).join('  >  ') : 'No fallback: a safety-filter block or outage on the main provider stops the chat.'),
+      h('span', null, query.isError ? 'Could not read the fallback chain. Restart Hermes to load the updated HARP backend.'
+        : !data ? 'Reading the fallback chain…'
+        : chain.length ? chain.map(e => `${e.provider} · ${e.model}`).join('  >  ') : 'No fallback: a safety-filter block or outage on the main provider stops the chat.'),
       h(Button, { size: 'sm', disabled: busy || !data?.suggested?.length, onClick: setup }, 'Set up fallback')),
     h('small', { className: 'harp-muted' }, 'Adds the other providers you are signed in to, so Hermes moves to them when the main model refuses or fails. Applies after the gateway restarts.'))
 }
