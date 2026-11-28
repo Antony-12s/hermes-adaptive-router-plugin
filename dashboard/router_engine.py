@@ -29,6 +29,7 @@ KEY_RECHECK = 300          # seconds between Jev key checks
 LOAD_MAX_AGE = 3600        # usage readings older than this do not count as load
 
 FOLLOWUP_WINDOW = 6 * 3600   # a choice reply this long after the last turn is judged on its own
+FALLBACK_TOP_TIER = 2        # highest tier the local learner may pick when Jev did not answer (2 = Sonnet medium)
 
 def ladder_table():
     """The ladder as the Desktop page shows it."""
@@ -172,12 +173,15 @@ class Engine:
         tier = ladder.tier_of_route(row["pick"].split(":", 1)[-1], row["effort"])
         return self.store.verify_route(decision_id, sample_label=str(tier))
 
-    def decide(self, text, session="", platform="", current="", log=True, use_jev=True):
+    def decide(self, text, session="", platform="", current="", log=True, use_jev=True, jev_always=False, mode=None):
+        """`mode` (the HARP provider's model) overrides the saved mode and router switch: picking it is consent."""
         settings = self.settings()
+        if mode:
+            settings = {**settings, "mode": mode, "enabled": True, "ladder": True}
         if not settings["enabled"] or not (settings["candidates"] or settings["ladder"]) or not (text or "").strip():
             return None
         if settings["ladder"]:
-            decision = self._decide_ladder(text, settings, self.loads(settings), use_jev, session)
+            decision = self._decide_ladder(text, settings, self.loads(settings), use_jev, session, jev_always)
             if log:
                 decision["id"] = self.store.log(decision, text, session, platform, current, applied=settings["apply"])
             return decision
@@ -206,8 +210,9 @@ class Engine:
             return None
         return ladder.tier_of_route(last[0].split(":", 1)[-1], last[1])
 
-    def _decide_ladder(self, text, settings, loads, use_jev, session=""):
-        """Tier from the learner (or Jev when it is unsure), provider from quota, model and effort from the ladder."""
+    def _decide_ladder(self, text, settings, loads, use_jev, session="", jev_always=False):
+        """Tier from the learner (or Jev when it is unsure, or always with jev_always), provider from quota,
+        model and effort from the ladder."""
         mode, limit = settings["mode"], settings["limit"]
         heavyweight = ladder.heavyweight_provider(settings["heavyweight"])
         learner, seeds = self.tier_learner(), len(ladder.TIER_HINTS)
@@ -217,12 +222,21 @@ class Engine:
         if followed is not None:
             seeded, by = followed, "followup"
         picked = ladder.decide(text, learner, mode, heavyweight, loads, limit, seeds=seeds, tier=seeded)
-        if (seeded is None and use_jev and picked["unsure"] and self.jev_status()["state"] == "ok"
+        if (seeded is None and use_jev and (picked["unsure"] or jev_always) and self.jev_status()["state"] == "ok"
                 and self.store.jev_calls_today() < settings["jev_daily_cap"]):
             asked = self._ask_jev_tier(text, settings)
             if asked:
                 picked = ladder.decide(text, learner, mode, heavyweight, loads, limit, seeds=seeds, jev=asked[0])
                 by, jev_ms = "jev", asked[1]
+        if by == "local" and seeded is None and picked["unsure"]:
+            # Jev unavailable for an unsure pick: the local learner alone was wrong on 8 of 20 probes and sent trivial questions to Opus xhigh.
+            # A sure local pick is trusted and never capped.
+            # Without Jev, never route above the Sonnet rung.
+            # Cap only the tier and its rung; keep what the learner actually thought (probs, confidence, unsure),
+            # or the decision log and later learning see a fake one-hot certainty.
+            capped = ladder.decide(text, learner, mode, heavyweight, loads, limit, seeds=seeds, tier=min(picked["tier"], FALLBACK_TOP_TIER))
+            picked = {**capped, **{k: picked[k] for k in ("confidence", "unsure", "expected", "probs")}}
+            by = "local-capped"
         moved = picked["moved_from"]
         return {"pick": f"{picked['provider']}:{picked['model']}", "label": str(picked["tier"]), "effort": picked["effort"],
                 "by": by, "confidence": picked["confidence"], "probs": picked["probs"], "difficulty": picked["expected"],

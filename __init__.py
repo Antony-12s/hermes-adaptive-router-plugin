@@ -318,22 +318,40 @@ def _decide_turn(engine, settings, text, session, platform, model, provider):
     return decision
 
 
+def _route_harp_turn(engine, agent, text, session, platform, model):
+    """The session is on the `harp` provider: decide now and bind the pick onto this one turn."""
+    import logging
+
+    route = _sibling("provider_route")
+    decision = engine.decide(text, session, platform, model, mode=route.mode_for(getattr(agent, "model", "") or model))
+    if not decision:
+        return
+    bound, reason = route.bind_turn(agent, decision, route.hermes_binder)
+    if not bound:
+        logging.getLogger(__name__).warning("HARP could not bind %s for this turn (%s); it runs on the HARP facade",
+                                            decision.get("pick"), reason)
+
+
 def route_turn(session_id=None, user_message=None, platform=None, model=None, **_metadata):
     """pre_llm_call: decide provider/model/effort for this message.
 
-    Shadow mode (default) decides on a background thread and only records it. Apply mode decides
-    now and keeps the pick for this turn when it stays on the session's own provider."""
+    A session on the `harp` provider is always routed: the pick is bound onto the turn, any provider.
+    Otherwise shadow mode (default) decides on a background thread and only records it, and apply mode
+    decides now and keeps the pick for this turn when it stays on the session's own provider."""
     try:
         engine = _engine()
-        settings = engine.settings()
-        if not settings["enabled"] or not (settings["candidates"] or settings.get("ladder")):
-            return None
         session = str(session_id or "")
         _TURN_ROUTES.pop(session, None)
         agent = _find_agent(session)
         if int(getattr(agent, "_delegate_depth", 0) or 0) > 0:
             return None   # delegate_task child: its model is the delegation backend's (model_map) call
         text = _sibling("router").message_text(user_message)
+        if agent is not None and _sibling("provider_route").is_harp(agent):
+            _route_harp_turn(engine, agent, text, session, platform or "", model or "")
+            return None
+        settings = engine.settings()
+        if not settings["enabled"] or not (settings["candidates"] or settings.get("ladder")):
+            return None
         provider = getattr(agent, "provider", "") or ""
         if not settings["apply"]:
             import threading

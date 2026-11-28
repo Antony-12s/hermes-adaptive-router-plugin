@@ -51,7 +51,8 @@ class LadderEngineTests(unittest.TestCase):
         for text in ("zzz qqq", "hi there", "design a multi-tenant architecture"):
             d = self.engine.decide(text, log=False, use_jev=False)
             self.assertTrue(d["unsure"])
-            self.assertEqual(d["tier"], ladder.UNSURE_TIER, text)
+            self.assertEqual(d["by"], "local-capped", text)
+            self.assertEqual(d["tier"], min(ladder.UNSURE_TIER, router_engine.FALLBACK_TOP_TIER), text)
 
     def test_a_known_weather_lookup_goes_to_the_cheapest_tier(self):
         d = self.engine.decide("will it rain today?", log=False, use_jev=False)
@@ -63,6 +64,24 @@ class LadderEngineTests(unittest.TestCase):
         self.assertEqual(self.asks, [["tier"]])
         again = self.engine.decide("rebuild the billing pipeline end to end", log=False, use_jev=False)
         self.assertGreater(again["probs"]["4"], again["probs"]["0"])
+
+    def test_jev_always_asks_jev_even_when_the_learner_is_sure(self):
+        from unittest.mock import patch
+
+        with patch.dict(ladder.MODE_SURE, {"save": 0.0, "balanced": 0.0, "best": 0.0}):
+            sure = self.engine.decide("rebuild the billing pipeline end to end", log=False)
+            self.assertEqual((sure["by"], self.asks), ("local", []))
+            asked = self.engine.decide("rebuild the billing pipeline end to end", log=False, jev_always=True)
+        self.assertEqual((asked["by"], asked["tier"], self.asks), ("jev", 4, [["tier"]]))
+
+    def test_a_mode_passed_to_decide_overrides_the_saved_mode_and_switch(self):
+        # The HARP provider's model (harp-save/balanced/best) is the mode, and picking it is consent to route.
+        self.engine.save({"mode": "save", "enabled": False})
+        self.assertIsNone(self.engine.decide("rebuild the billing pipeline end to end", log=False))
+        best = self.engine.decide("rebuild the billing pipeline end to end", log=False, jev_always=True, mode="best")
+        self.assertEqual((best["by"], best["tier"]), ("jev", 4))
+        save = self.engine.decide("rebuild the billing pipeline end to end", log=False, jev_always=True, mode="save")
+        self.assertLessEqual(save["tier"], ladder.MODE_TOP_TIER["save"])
 
     def test_the_mode_sets_the_top_tier_and_heavyweight_sets_the_provider(self):
         self.engine.save({"mode": "save"})

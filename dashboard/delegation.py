@@ -150,7 +150,9 @@ def ladder_route(goal, engine):
     try:
         if not engine.settings().get("ladder"):
             return None
-        decision = engine.decide(goal, log=False, use_jev=False)
+        # A subagent task is rated by Jev every time: one call costs far less than a task on the wrong tier,
+        # and the tier learner is often sure and wrong about task text written for an agent.
+        decision = engine.decide(goal, log=False, use_jev=True, jev_always=True)
     except Exception:  # noqa: BLE001 - routing a subagent must never refuse the task
         return None
     if not decision or ":" not in decision.get("pick", ""):

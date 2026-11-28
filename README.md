@@ -47,6 +47,16 @@ HARP adds model routing, account quota monitoring, and subagent route settings t
 
 Use the same Hermes profile for installation, provider authentication, and the gateway. This repository ships one plugin for Windows, Linux, and macOS.
 
+## HARP in the model picker (experimental)
+
+HARP can also be a provider in the Hermes model picker. Pick **HARP** with `harp-save`, `harp-balanced` or `harp-best` (the model is the routing focus), and HARP runs every message on the Claude or Codex model and effort it picks for that message. Nothing falls through to your default model: auxiliary tasks set to `auto` (titles, compression) use the cheapest rung.
+
+1. Copy the `provider/` folder to `$HERMES_HOME/plugins/model-providers/harp/`.
+2. Add `HARP_ROUTER_KEY=local` to `$HERMES_HOME/.env`. It is a placeholder, not a secret; Hermes lists a provider only once it is configured.
+3. Restart the Hermes gateway.
+
+Each turn is bound to the picked provider with Hermes' per-turn route swap (the one its voice-chat model and fallback chain use), and Hermes restores HARP when the next message starts. That swap is a private Hermes API checked against Hermes v0.23.3, so a Hermes update can break it; if a bind fails, the turn runs on the cheapest rung without live typing and a warning is logged. Switching provider between messages re-sends the conversation without the other provider's prompt cache.
+
 ## How routing works
 
 ```mermaid

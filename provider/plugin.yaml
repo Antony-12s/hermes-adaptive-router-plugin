@@ -1,0 +1,5 @@
+name: harp-provider
+kind: model-provider
+version: 0.1.0
+description: HARP in the model picker - routes each message to the right Claude or Codex model and effort
+author: wasakorn

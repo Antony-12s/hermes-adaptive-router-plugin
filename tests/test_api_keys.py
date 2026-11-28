@@ -137,8 +137,8 @@ class LadderDelegationTests(unittest.TestCase):
     def engine(self, pick="anthropic:claude-opus-5-5", effort="medium", ladder=True):
         decisions = []
 
-        def decide(goal, log=True, use_jev=True):
-            decisions.append((goal, log, use_jev))
+        def decide(goal, log=True, use_jev=True, jev_always=False):
+            decisions.append((goal, log, use_jev, jev_always))
             return {"pick": pick, "effort": effort}
         engine = SimpleNamespace(home="h", settings=lambda: {"ladder": ladder}, decide=decide,
                                  loads=lambda s: {"anthropic": {"pool_near_limit": False}})
@@ -148,7 +148,7 @@ class LadderDelegationTests(unittest.TestCase):
         engine, decisions = self.engine()
         self.assertEqual(delegation.ladder_route("refactor the parser", engine),
                          {"provider": "anthropic", "model": "claude-opus-5-5", "reasoning_effort": "medium"})
-        self.assertEqual(decisions, [("refactor the parser", False, False)])   # not logged as a chat turn, no Jev call
+        self.assertEqual(decisions, [("refactor the parser", False, True, True)])   # not logged as a chat turn, Jev always rates it
 
     def test_ladder_off_empty_goal_or_a_failure_keeps_hermes_default(self):
         self.assertIsNone(delegation.ladder_route("x", self.engine(ladder=False)[0]))
